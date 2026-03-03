@@ -147,6 +147,8 @@ TABLE_STATEMENTS = [
 		upload_status ENUM('已上传', '待上传') DEFAULT '待上传' COMMENT '联单上传状态',
 		source_type ENUM('司机', '公司') DEFAULT '公司' COMMENT '来源：司机/公司',
 		shipper VARCHAR(64) COMMENT '发货人（默认操作人）',
+		reporter_id BIGINT COMMENT '报单人ID（关联pd_users.id）',
+		reporter_name VARCHAR(64) COMMENT '报单人姓名',
 		payee VARCHAR(64) COMMENT '收款人',
 		service_fee DECIMAL(14, 2) DEFAULT 0 COMMENT '服务费',
 		contract_no VARCHAR(64) COMMENT '关联合同编号',
@@ -162,7 +164,11 @@ TABLE_STATEMENTS = [
 		INDEX idx_contract_no (contract_no),
 		INDEX idx_target_factory (target_factory_id),
 		INDEX idx_vehicle_no (vehicle_no),
-		INDEX idx_status (status)
+		INDEX idx_status (status),
+		INDEX idx_shipper (shipper),
+		INDEX idx_has_delivery_order (has_delivery_order),
+		INDEX idx_upload_status (upload_status),
+		INDEX idx_driver_phone_created_at (driver_phone, created_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='销售台账/报货订单';
 	""",
 	"""
@@ -195,7 +201,9 @@ TABLE_STATEMENTS = [
 		INDEX idx_vehicle_no (vehicle_no),
 		INDEX idx_contract_no (contract_no),
 		INDEX idx_delivery_id (delivery_id),
-		INDEX idx_status (ocr_status)
+		INDEX idx_status (ocr_status),
+		INDEX idx_upload_status (upload_status),
+		UNIQUE KEY uk_delivery_product (delivery_id, product_name)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='磅单表';
 	""",
 	"""
@@ -300,10 +308,16 @@ TABLE_STATEMENTS = [
 		driver_phone VARCHAR(32) COMMENT '司机电话',
 		vehicle_no VARCHAR(32) COMMENT '车牌号',
 		payee_id BIGINT COMMENT '收款人ID',
+		payee_name VARCHAR(64) COMMENT '收款人姓名',
+		payee_account VARCHAR(32) COMMENT '收款账号',
+		purchase_unit_price DECIMAL(14, 2) DEFAULT 0 COMMENT '采购单价',
 		payable_amount DECIMAL(14, 2) NOT NULL COMMENT '应付金额',
 		paid_amount DECIMAL(14, 2) DEFAULT 0 COMMENT '已支付金额',
 		balance_amount DECIMAL(14, 2) COMMENT '结余金额',
 		payment_status TINYINT DEFAULT 0 COMMENT '0=待支付, 1=部分支付, 2=已结清',
+		payout_status TINYINT DEFAULT 0 COMMENT '打款状态：0=待打款, 1=已打款',
+		schedule_date DATE COMMENT '排款日期',
+		schedule_status TINYINT DEFAULT 0 COMMENT '排期状态：0=待排期, 1=已排期',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		UNIQUE KEY uk_weighbill (weighbill_id),
@@ -311,7 +325,11 @@ TABLE_STATEMENTS = [
 		INDEX idx_driver_name (driver_name),
 		INDEX idx_payee_id (payee_id),
 		INDEX idx_payment_status (payment_status),
-		INDEX idx_created_at (created_at)
+		INDEX idx_created_at (created_at),
+		INDEX idx_payee_name (payee_name),
+		INDEX idx_schedule_date (schedule_date),
+		INDEX idx_schedule_status (schedule_status),
+		INDEX idx_payout_status (payout_status)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='磅单结余明细表';
 	""",
 	"""
@@ -330,15 +348,22 @@ TABLE_STATEMENTS = [
 	CREATE TABLE IF NOT EXISTS pd_payment_details (
 		id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '收款明细ID',
 		sales_order_id BIGINT NOT NULL COMMENT '销售订单ID',
+		delivery_id BIGINT COMMENT '报货订单ID',
+		weighbill_id BIGINT COMMENT '磅单ID',
 		smelter_name VARCHAR(100) NOT NULL COMMENT '冶炼厂名称',
 		contract_no VARCHAR(50) NOT NULL COMMENT '合同编号',
 		material_name VARCHAR(100) DEFAULT '' COMMENT '物料名称',
 		unit_price DECIMAL(15, 2) NOT NULL COMMENT '合同单价（元/吨）',
 		net_weight DECIMAL(15, 4) NOT NULL COMMENT '净重（吨）',
 		total_amount DECIMAL(15, 2) NOT NULL COMMENT '应回款总额',
+		arrival_payment_amount DECIMAL(15, 2) DEFAULT 0.00 COMMENT '应回款首笔金额',
+		final_payment_amount DECIMAL(15, 2) DEFAULT 0.00 COMMENT '应回款尾款金额',
 		paid_amount DECIMAL(15, 2) DEFAULT 0.00 COMMENT '累计已付金额',
+		arrival_paid_amount DECIMAL(15, 2) DEFAULT 0.00 COMMENT '已回款首笔金额',
+		final_paid_amount DECIMAL(15, 2) DEFAULT 0.00 COMMENT '已回款尾款金额',
 		unpaid_amount DECIMAL(15, 2) NOT NULL COMMENT '未付金额',
 		status TINYINT DEFAULT 0 COMMENT '回款状态：0-未回款, 1-部分回款, 2-已结清, 3-超额回款',
+		collection_status TINYINT DEFAULT 0 COMMENT '回款状态：0-待回款, 1-已回首笔待回尾款, 2-已回款',
 		payment_schedule_date DATE COMMENT '排款日期',
 		remark TEXT COMMENT '备注',
 		created_by BIGINT COMMENT '创建人ID',
@@ -346,9 +371,12 @@ TABLE_STATEMENTS = [
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 
 		INDEX idx_sales_order_id (sales_order_id),
+		INDEX idx_delivery_id (delivery_id),
+		INDEX idx_weighbill_id (weighbill_id),
 		INDEX idx_smelter_name (smelter_name),
 		INDEX idx_contract_no (contract_no),
 		INDEX idx_status (status),
+		INDEX idx_collection_status (collection_status),
 		INDEX idx_created_at (created_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收款明细台账表';
 	""",
