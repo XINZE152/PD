@@ -64,12 +64,23 @@ class SettlementItem(BaseModel):
 
 class BalanceOut(BaseModel):
     id: int
+    schedule_date: Optional[str] = None
     contract_no: Optional[str] = None
+    report_date: Optional[str] = None
+    target_factory_name: Optional[str] = None
     driver_name: Optional[str] = None
     driver_phone: Optional[str] = None
+    driver_id_card: Optional[str] = None
     payee_name: Optional[str] = None
     payee_account: Optional[str] = None
     vehicle_no: Optional[str] = None
+    product_name: Optional[str] = None
+    has_delivery_order: Optional[str] = None
+    upload_status: Optional[str] = None
+    shipper: Optional[str] = None
+    weigh_date: Optional[str] = None
+    weigh_ticket_no: Optional[str] = None
+    net_weight: Optional[float] = None
     purchase_unit_price: Optional[float] = None
     payable_amount: Optional[float] = None
     paid_amount: Optional[float] = None

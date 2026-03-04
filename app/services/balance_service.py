@@ -886,7 +886,18 @@ class BalanceService:
                         SELECT 
                             b.*,
                             w.weighbill_image,
-                            d.payee as delivery_payee_name,
+                            w.weigh_date,
+                            w.weigh_ticket_no,
+                            w.net_weight,
+                            w.product_name,
+                            w.unit_price as weighbill_unit_price,
+                            d.report_date,
+                            d.target_factory_name,
+                            d.driver_id_card,
+                            d.has_delivery_order,
+                            d.upload_status,
+                            d.shipper,
+                            d.service_fee,
                             (SELECT COUNT(*) FROM pd_receipt_settlements rs 
                              JOIN pd_payment_receipts pr ON rs.receipt_id = pr.id 
                              WHERE rs.balance_id = b.id) as receipt_count
@@ -906,13 +917,17 @@ class BalanceService:
 
                     for row in cur.fetchall():
                         item = dict(zip(columns, row))
-                        for key in ['created_at', 'updated_at', 'schedule_date']:
+                        for key in ['created_at', 'updated_at', 'schedule_date', 'report_date', 'weigh_date']:
                             if item.get(key):
                                 item[key] = str(item[key])
                         # 添加状态名称
                         item['payment_status_name'] = status_map.get(item.get('payment_status'), "未知")
                         item['payout_status_name'] = payout_map.get(item.get('payout_status'), "未知")
                         item['schedule_status_name'] = schedule_map.get(item.get('schedule_status'), "未知")
+
+                        if not item.get('purchase_unit_price'):
+                            item['purchase_unit_price'] = item.get('weighbill_unit_price')
+
                         data.append(item)
 
                     return {
