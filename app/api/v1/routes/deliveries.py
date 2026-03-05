@@ -166,6 +166,63 @@ async def create_delivery(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============ JSON 专用接口 ============
+
+class DeliveryCreateJsonRequest(BaseModel):
+    """JSON 格式创建报货订单请求体"""
+    report_date: str = Field(..., description="报货日期")
+    warehouse: Optional[str] = Field(None, description="送货库房")
+    target_factory_id: Optional[int] = Field(None, description="目标工厂ID")
+    target_factory_name: str = Field(..., description="目标工厂名称")
+    product_name: str = Field(..., description="主品种")
+    products: Optional[str] = Field(None, description="品种列表，逗号分隔")
+    quantity: float = Field(..., description="数量（吨）")
+    vehicle_no: str = Field(..., description="车牌号")
+    driver_name: str = Field(..., description="司机姓名")
+    driver_phone: str = Field(..., description="司机电话")
+    driver_id_card: Optional[str] = Field(None, description="身份证号")
+    has_delivery_order: str = Field("无", description="是否有联单：有/无")
+    payee: Optional[str] = Field(None, description="收款人")
+    status: str = Field("待确认", description="状态")
+    uploaded_by: Optional[str] = Field(None, description="上传者身份：司机/公司")
+    reporter_id: Optional[int] = Field(None, description="报单人ID")
+    reporter_name: Optional[str] = Field(None, description="报单人姓名")
+    confirm_flag: bool = Field(False, description="二次确认标志")
+
+
+@router.post("/json", response_model=dict)
+async def create_delivery_json(
+        body: DeliveryCreateJsonRequest,
+        service: DeliveryService = Depends(get_delivery_service),
+        current_user: dict = Depends(get_current_user)
+):
+    """JSON 格式创建报货订单（不支持文件上传）"""
+    try:
+        # 转换为字典，兼容原有逻辑
+        data = body.model_dump(exclude_none=False)
+
+        # 调用原有服务方法
+        result = service.create_delivery(data, None, current_user, data.get("confirm_flag", False))
+
+        if result.get("need_confirm"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": result.get("error"),
+                    "existing_orders": result.get("existing_orders"),
+                    "need_confirm": True
+                }
+            )
+
+        if result["success"]:
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error"))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 @router.get("/", response_model=dict)
 async def list_deliveries(
     exact_shipper: Optional[str] = Query(None, description="精确发货人/报单人"),
