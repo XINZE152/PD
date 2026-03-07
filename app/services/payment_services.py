@@ -840,6 +840,12 @@ class PaymentService:
         """
         with get_conn() as conn:
             with conn.cursor() as cur:
+                cur.execute(f"SHOW COLUMNS FROM {PaymentService.TABLE_NAME}")
+                columns = [r["Field"] for r in cur.fetchall()]
+                has_payee = "payee" in columns
+                has_payee_account = "payee_account" in columns
+                has_is_paid_out = "is_paid_out" in columns
+
                 # 构建WHERE条件 - 必须已排期
                 where_clauses = ["wb.payment_schedule_date IS NOT NULL"]  # 必须已排期
                 params = []
@@ -865,7 +871,7 @@ class PaymentService:
                     params.append(end_date)
 
                 # 打款状态筛选
-                if is_paid_out is not None:
+                if is_paid_out is not None and has_is_paid_out:
                     where_clauses.append("pd.is_paid_out = %s")
                     params.append(is_paid_out)
 
@@ -882,11 +888,11 @@ class PaymentService:
                         where_clauses.append("wb.payment_schedule_date IS NULL")
 
                 if keyword:
+                    payee_filter = "pd.payee" if has_payee else "d.payee"
                     where_clauses.append(
-                        "(pd.contract_no LIKE %s OR pd.smelter_name LIKE %s OR wb.weigh_ticket_no LIKE %s OR d.driver_name LIKE %s OR pd.payee LIKE %s)")
+                        f"(pd.contract_no LIKE %s OR pd.smelter_name LIKE %s OR wb.weigh_ticket_no LIKE %s OR d.driver_name LIKE %s OR {payee_filter} LIKE %s)")
                     keyword_pattern = f"%{keyword}%"
-                    params.extend([keyword_pattern, keyword_pattern, keyword_pattern, keyword_pattern, keyword_pattern,
-                                   keyword_pattern])
+                    params.extend([keyword_pattern, keyword_pattern, keyword_pattern, keyword_pattern, keyword_pattern])
 
                 where_sql = " AND ".join(where_clauses)
 
@@ -903,6 +909,9 @@ class PaymentService:
 
                 # 分页查询 - 打款信息列表字段
                 offset = (page - 1) * size
+                payee_select = "pd.payee" if has_payee else "d.payee"
+                payee_account_select = "pd.payee_account" if has_payee_account else "NULL"
+                is_paid_out_select = "pd.is_paid_out" if has_is_paid_out else "0"
                 query_sql = f"""
                     SELECT 
                         -- ========== 第一行：排期信息 ==========
@@ -929,8 +938,8 @@ class PaymentService:
                         wb.unit_price as 采购单价,
                         wb.total_amount as 应打款金额,
                         pd.paid_amount as 已打款金额,  -- 注意：这里用paid_amount表示已打款
-                        pd.payee as 收款人,
-                        pd.payee_account as 收款人账号,
+                        {payee_select} as 收款人,
+                        {payee_account_select} as 收款人账号,
                         
                         -- ========== 第五行：回款信息（辅助） ==========
                         pd.arrival_payment_amount as 应回款首笔金额,
@@ -941,9 +950,9 @@ class PaymentService:
                         pd.collection_status as 回款状态,
                         
                         -- ========== 第六行：打款状态 ==========
-                        pd.is_paid_out as 打款状态,
+                        {is_paid_out_select} as 打款状态,
                         CASE 
-                            WHEN pd.is_paid_out = 1 THEN '已打款'
+                            WHEN {is_paid_out_select} = 1 THEN '已打款'
                             ELSE '待打款'
                         END as 打款状态显示,
                         
