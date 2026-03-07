@@ -63,7 +63,7 @@ class BalanceService:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     # 构建查询条件
-                    conditions = ["w.ocr_status = '已确认','已上传磅单'"]
+                    conditions = ["w.ocr_status IN ('已确认','已上传磅单')"]
                     params = []
 
                     if contract_no:

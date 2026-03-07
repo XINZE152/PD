@@ -264,26 +264,71 @@ async def list_balances_grouped(
 async def update_balance_payment(
         balance_id: int,
         paid_amount: float = Form(..., description="已打款金额"),
-        payout_status: int = Form(..., description="打款状态：0=待打款, 1=已打款"),
+        payee_name: Optional[str] = Form(None, description="收款人姓名"),
+        payee_account: Optional[str] = Form(None, description="收款人账号"),
+        payout_date: Optional[str] = Form(None, description="打款日期，格式：YYYY-MM-DD"),
         service: BalanceService = Depends(get_balance_service)
 ):
     """
     编辑打款信息
-    修改已打款金额和打款状态
+    输入Form格式
+
+    支持修改：
+    - 已打款金额（必填）
+    - 收款人姓名（可选）
+    - 收款人账号（可选）
+    - 打款日期（可选）
+
+    打款状态自动判断：
+    - 已打款金额 > 0 → 已打款 (payout_status=1)
+    - 已打款金额 = 0 → 待打款 (payout_status=0)
+
+    支付状态自动重新计算：
+    - 已打款金额 <= 0 → 待支付
+    - 已打款金额 >= 应付金额 → 已结清
+    - 0 < 已打款金额 < 应付金额 → 部分支付
     """
     try:
+        # 先检查结余明细是否存在
         result = service.recalculate_balance(balance_id)
         if not result["success"]:
             raise HTTPException(status_code=404, detail="结余明细不存在")
 
+        # 根据已打款金额自动判断打款状态
+        payout_status = 1 if paid_amount > 0 else 0
+
         # 更新打款信息
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                # 构建动态更新字段
+                update_fields = ["paid_amount = %s", "payout_status = %s"]
+                params = [paid_amount, payout_status]
+
+                # 收款人姓名（如果提供）
+                if payee_name is not None:
+                    update_fields.append("payee_name = %s")
+                    params.append(payee_name)
+
+                # 收款人账号（如果提供）
+                if payee_account is not None:
+                    update_fields.append("payee_account = %s")
+                    params.append(payee_account)
+
+                # 打款日期（如果提供）
+                if payout_date is not None:
+                    update_fields.append("payout_date = %s")
+                    params.append(payout_date)
+
+                update_fields.append("updated_at = NOW()")
+                params.append(balance_id)
+
+                # 执行更新
+                sql = f"""
                     UPDATE pd_balance_details 
-                    SET paid_amount = %s, payout_status = %s, updated_at = NOW()
+                    SET {', '.join(update_fields)}
                     WHERE id = %s
-                """, (paid_amount, payout_status, balance_id))
+                """
+                cur.execute(sql, tuple(params))
 
                 # 重新计算结余金额和支付状态
                 cur.execute("""
@@ -316,8 +361,13 @@ async def update_balance_payment(
             "data": {
                 "id": balance_id,
                 "paid_amount": paid_amount,
+                "payee_name": payee_name,
+                "payee_account": payee_account,
+                "payout_date": payout_date,
                 "payout_status": payout_status,
-                "payout_status_name": "已打款" if payout_status == 1 else "待打款"
+                "payout_status_name": "已打款" if payout_status == 1 else "待打款",
+                "payment_status": payment_status,
+                "payment_status_name": {0: "待支付", 1: "部分支付", 2: "已结清"}.get(payment_status, "未知")
             }
         }
 

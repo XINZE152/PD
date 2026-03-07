@@ -232,38 +232,46 @@ async def upload_weighbill(
             try:
                 from app.services.payment_services import PaymentService, calculate_payment_amount
                 from decimal import Decimal
-                
+
                 # 获取报单信息（用于获取冶炼厂、收款人等）
                 delivery_info = service.get_delivery_info(delivery_id)
-                
-                weighbill_id = result["data"].get("id")
+
+                weighbill_id = result["data"].get("weighbill_id")
+
+                # 确保有合同号
+                final_contract_no = data.get('contract_no') or delivery_info.get('contract_no', '')
+
+                # 计算金额
                 calculated_amount = None
                 if final_unit_price and net_weight:
                     calculated_amount = calculate_payment_amount(
-                        Decimal(str(final_unit_price)), 
+                        Decimal(str(final_unit_price)),
                         Decimal(str(net_weight))
                     )
-                
+
+                # 获取收款人（从报单）
+                payee_name = delivery_info.get("payee", "") if delivery_info else ""
+
                 # 创建或更新收款明细
-                PaymentService.create_or_update_by_weighbill(
+                payment_result = PaymentService.create_or_update_by_weighbill(
                     weighbill_id=weighbill_id,
                     delivery_id=delivery_id,
-                    contract_no=contract_no or data.get("contract_no", ""),
+                    contract_no=final_contract_no,
                     smelter_name=delivery_info.get("target_factory_name", "") if delivery_info else "",
                     material_name=product_name,
                     unit_price=Decimal(str(final_unit_price)) if final_unit_price else None,
                     net_weight=Decimal(str(net_weight)) if net_weight else None,
                     total_amount=calculated_amount,
-                    payee=delivery_info.get("payee", "") if delivery_info else "",
-                    payee_account="",  # 如有账号字段从delivery_info获取
-                    created_by=current_user.get("id")
+                    payee=payee_name,
+                    created_by=current_user.get("id") if current_user else None
                 )
-                
-                # 将收款明细ID添加到返回结果中
+
                 result["data"]["payment_detail_created"] = True
-                
+                result["data"]["payment_detail_id"] = payment_result.get("id") if isinstance(payment_result,
+                                                                                             dict) else None
+
             except Exception as e:
-                logger.warning(f"自动创建收款明细失败: {e}")
+                logger.error(f"自动创建收款明细失败: {e}", exc_info=True)
                 result["data"]["payment_detail_created"] = False
                 result["data"]["payment_detail_error"] = str(e)
             # ========== 新增结束 ==========
