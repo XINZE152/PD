@@ -380,36 +380,31 @@ def create_payment_detail(
 
 @router.get("/details", summary="回款信息列表", response_model=dict)
 def list_payment_details(
-        page: int = Query(1, ge=1, description="页码"),
-        size: int = Query(20, ge=1, le=100, description="每页数量"),
-        # 原有筛选
-        status: Optional[int] = Query(None, ge=0, le=3, description="回款明细状态"),
-        smelter_name: Optional[str] = Query(None, description="冶炼厂名称"),
-        contract_no: Optional[str] = Query(None, description="合同编号"),
-        start_date: Optional[date] = Query(None, description="开始日期"),
-        end_date: Optional[date] = Query(None, description="结束日期"),
-        keyword: Optional[str] = Query(None, description="关键词搜索"),
-        # 新增列表专用筛选
-        report_date: Optional[str] = Query(None, description="报单日期"),
-        driver_name: Optional[str] = Query(None, description="司机姓名"),
-        vehicle_no: Optional[str] = Query(None, description="车号"),
-        weigh_date: Optional[str] = Query(None, description="磅单日期"),
-        payment_date: Optional[str] = Query(None, description="回款日期"),
-        collection_status: Optional[int] = Query(None, ge=0, le=2,
-                                                 description="回款状态：0-待回款, 1-已回首笔, 2-已回款"),
-        current_user: dict = Depends(get_current_user)
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(20, ge=1, le=100, description="每页数量"),
+    status: Optional[int] = Query(None, ge=0, le=3, description="回款明细状态筛选"),
+    smelter_name: Optional[str] = Query(None, description="冶炼厂名称"),
+    contract_no: Optional[str] = Query(None, description="合同编号"),
+    start_date: Optional[date] = Query(None, description="开始日期"),
+    end_date: Optional[date] = Query(None, description="结束日期"),
+    keyword: Optional[str] = Query(None, description="关键词搜索"),
+    # 回款列表筛选参数
+    collection_status: Optional[int] = Query(None, ge=0, le=2, description="回款状态筛选：0-待回款, 1-已回首笔待回尾款, 2-已回尾款"),
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    回款信息列表（按磅单平铺）
-
-    表头三行：
-    - 第一行：合同编号、报单日期、报送冶炼厂、司机电话、司机姓名、车号、品种、是否自带联单、是否上传联单、报单人/发货人、收款人
-    - 第二行：磅单日期、过磅单号、净重、销售单价、应回款首笔金额、应回款尾款金额、已回款首笔金额、已回款尾款金额、回款日期
-    - 第三行：回款状态、备注、创建/更新时间、操作
-
-    只显示已上传磅单的数据
-
-    查询条件：合同编号、报单日期、司机姓名、车号、磅单日期、回款日期、回款状态
+    获取回款信息列表
+    
+    只返回已上传磅单的数据，包含销售相关的回款字段：
+    - 第一行：合同编号、报单日期、报送冶炼厂、司机电话、司机姓名、车号、品种、是否自带联单、是否上传联单、报单人/发货人
+    - 第二行：磅单日期、过磅单号、净重
+    - 第三行：销售单价、应回款首笔金额、应回款尾款金额、已回款首笔金额、已回款尾款金额、回款日期
+    - 第四行：回款状态、操作
+    
+    回款状态说明：
+    - 0: 待回款（已上传磅单后默认）
+    - 1: 已回首笔待回尾款
+    - 2: 已回尾款
     """
     check_finance_permission(current_user)
 
@@ -423,16 +418,69 @@ def list_payment_details(
             start_date=start_date,
             end_date=end_date,
             keyword=keyword,
-            report_date=report_date,
-            driver_name=driver_name,
-            vehicle_no=vehicle_no,
-            weigh_date=weigh_date,
             collection_status=collection_status
         )
         return result
 
     except Exception as e:
-        logger.exception("查询回款列表异常")
+        logger.exception("查询回款信息列表异常")
+        raise HTTPException(status_code=500, detail="查询失败")
+    
+@router.get("/payment-out", summary="打款信息列表（打款排期列表）", response_model=dict)
+def list_payment_out_details(
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(20, ge=1, le=100, description="每页数量"),
+    status: Optional[int] = Query(None, ge=0, le=3, description="状态筛选"),
+    smelter_name: Optional[str] = Query(None, description="冶炼厂名称"),
+    contract_no: Optional[str] = Query(None, description="合同编号"),
+    start_date: Optional[date] = Query(None, description="开始日期"),
+    end_date: Optional[date] = Query(None, description="结束日期"),
+    keyword: Optional[str] = Query(None, description="关键词搜索"),
+    # 打款列表筛选参数
+    is_paid_out: Optional[int] = Query(None, ge=0, le=1, description="打款状态筛选：0-待打款, 1-已打款"),
+    payment_schedule_date: Optional[str] = Query(None, description="排期日期筛选"),
+    has_schedule: Optional[int] = Query(None, ge=0, le=1, description="排期状态筛选：0-待排期, 1-已排期"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    获取打款信息列表（打款排期列表）
+    
+    只返回已排期的数据，包含采购相关的打款字段：
+    - 第一行：排款日期
+    - 第二行：合同编号、报单日期、报送冶炼厂、司机电话、司机姓名、车号、品种、是否自带联单、是否上传联单、报单人/发货人
+    - 第三行：磅单日期、过磅单号、净重
+    - 第四行：采购单价、应打款金额、已打款金额、收款人、收款人账号
+    - 第五行：应回款首笔金额、应回款尾款金额、已回款首笔金额、已回款尾款金额、回款日期、回款状态
+    - 第六行：打款状态、排期状态、操作
+    
+    打款状态说明：
+    - 0: 待打款
+    - 1: 已打款
+    
+    排期状态说明：
+    - 已排期：已设置排款日期
+    - 待排期：未设置排款日期
+    """
+    check_finance_permission(current_user)
+
+    try:
+        result = PaymentService.list_payment_out_details(
+            page=page,
+            size=size,
+            status=status,
+            smelter_name=smelter_name,
+            contract_no=contract_no,
+            start_date=start_date,
+            end_date=end_date,
+            keyword=keyword,
+            is_paid_out=is_paid_out,
+            payment_schedule_date=payment_schedule_date,
+            has_schedule=has_schedule
+        )
+        return result
+
+    except Exception as e:
+        logger.exception("查询打款信息列表异常")
         raise HTTPException(status_code=500, detail="查询失败")
 
 
