@@ -15,6 +15,137 @@ logger = logging.getLogger(__name__)
 class CustomerService:
     """客户服务"""
 
+    def create_warehouse_payee(self, data: Dict) -> Dict[str, Any]:
+        """新增库房收款员信息"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO pd_warehouse_payees
+                        (warehouse_name, payee_name, payee_account, payee_bank_name, is_active)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            data.get("warehouse_name"),
+                            data.get("payee_name"),
+                            data.get("payee_account"),
+                            data.get("payee_bank_name"),
+                            data.get("is_active", 1),
+                        ),
+                    )
+
+                    return {
+                        "success": True,
+                        "message": "库房收款员信息创建成功",
+                        "data": {"id": cur.lastrowid},
+                    }
+        except Exception as e:
+            logger.error(f"创建库房收款员信息失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    def update_warehouse_payee(self, payee_id: int, data: Dict) -> Dict[str, Any]:
+        """编辑库房收款员信息"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM pd_warehouse_payees WHERE id = %s", (payee_id,))
+                    if not cur.fetchone():
+                        return {"success": False, "error": f"记录ID {payee_id} 不存在"}
+
+                    allowed_fields = [
+                        "warehouse_name",
+                        "payee_name",
+                        "payee_account",
+                        "payee_bank_name",
+                        "is_active",
+                    ]
+                    update_fields = []
+                    params = []
+                    for field in allowed_fields:
+                        if field in data:
+                            update_fields.append(f"{field} = %s")
+                            params.append(data[field])
+
+                    if not update_fields:
+                        return {"success": False, "error": "没有要更新的字段"}
+
+                    params.append(payee_id)
+                    cur.execute(
+                        f"UPDATE pd_warehouse_payees SET {', '.join(update_fields)} WHERE id = %s",
+                        tuple(params),
+                    )
+
+                    return {
+                        "success": True,
+                        "message": "库房收款员信息更新成功",
+                        "data": {"id": payee_id},
+                    }
+        except Exception as e:
+            logger.error(f"更新库房收款员信息失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    def list_warehouse_payees(
+        self,
+        warehouse_name: Optional[str] = None,
+        payee_name: Optional[str] = None,
+        is_active: Optional[int] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        """查询库房收款员信息列表"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    where_clauses = []
+                    params = []
+
+                    if warehouse_name:
+                        where_clauses.append("warehouse_name LIKE %s")
+                        params.append(f"%{warehouse_name}%")
+                    if payee_name:
+                        where_clauses.append("payee_name LIKE %s")
+                        params.append(f"%{payee_name}%")
+                    if is_active is not None:
+                        where_clauses.append("is_active = %s")
+                        params.append(is_active)
+
+                    where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+                    cur.execute(
+                        f"SELECT COUNT(*) FROM pd_warehouse_payees {where_clause}",
+                        tuple(params),
+                    )
+                    total = cur.fetchone()[0]
+
+                    offset = (page - 1) * page_size
+                    cur.execute(
+                        f"""
+                        SELECT id, warehouse_name, payee_name, payee_account, payee_bank_name, is_active,
+                               created_at, updated_at
+                        FROM pd_warehouse_payees
+                        {where_clause}
+                        ORDER BY id DESC
+                        LIMIT %s OFFSET %s
+                        """,
+                        tuple(params + [page_size, offset]),
+                    )
+
+                    columns = [desc[0] for desc in cur.description]
+                    rows = cur.fetchall()
+                    data = [dict(zip(columns, row)) for row in rows]
+
+                    return {
+                        "success": True,
+                        "data": data,
+                        "total": total,
+                        "page": page,
+                        "page_size": page_size,
+                    }
+        except Exception as e:
+            logger.error(f"查询库房收款员信息失败: {e}")
+            return {"success": False, "error": str(e), "data": [], "total": 0}
+
     def create_customer(self, data: Dict) -> Dict[str, Any]:
         """创建客户"""
         try:

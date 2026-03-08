@@ -236,7 +236,21 @@ TABLE_STATEMENTS = [
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 	""",
-
+	    """
+    CREATE TABLE IF NOT EXISTS pd_warehouse_payees (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        warehouse_name VARCHAR(64) NOT NULL COMMENT '库房名称',
+        payee_name VARCHAR(64) NOT NULL COMMENT '收款人姓名',
+        payee_account VARCHAR(32) NOT NULL COMMENT '收款账号',
+        payee_bank_name VARCHAR(64) COMMENT '收款银行名称',
+        is_active TINYINT DEFAULT 1 COMMENT '是否启用：1=启用，0=停用',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_warehouse_name (warehouse_name),
+        INDEX idx_payee_name (payee_name),
+        INDEX idx_is_active (is_active)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='库房与收款人配置表';
+    """,
 	# ========== 新增合同管理表 ==========
 	"""
 	CREATE TABLE IF NOT EXISTS pd_contracts (

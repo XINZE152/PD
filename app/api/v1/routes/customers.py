@@ -32,6 +32,26 @@ class CustomerUpdateRequest(BaseModel):
     credit_code: Optional[str] = Field(None, description="统一社会信用代码", max_length=32)  # 新增
 
 
+class WarehousePayeeCreateRequest(BaseModel):
+    """库房收款员新增请求"""
+
+    warehouse_name: str = Field(..., min_length=1, max_length=100)
+    payee_name: str = Field(..., min_length=1, max_length=100)
+    payee_account: Optional[str] = Field(None, max_length=100)
+    payee_bank_name: Optional[str] = Field(None, max_length=100)
+    is_active: int = Field(1, ge=0, le=1)
+
+
+class WarehousePayeeUpdateRequest(BaseModel):
+    """库房收款员编辑请求"""
+
+    warehouse_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    payee_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    payee_account: Optional[str] = Field(None, max_length=100)
+    payee_bank_name: Optional[str] = Field(None, max_length=100)
+    is_active: Optional[int] = Field(None, ge=0, le=1)
+
+
 class CustomerOut(BaseModel):
     id: int
     smelter_name: str
@@ -98,6 +118,28 @@ async def list_customers(
     )
 
 
+@router.get("/warehouse-payees", summary="查询库房收款员信息列表")
+async def list_warehouse_payees(
+    warehouse_name: Optional[str] = Query(None, description="库房名称(模糊搜索)"),
+    payee_name: Optional[str] = Query(None, description="收款员名称(模糊搜索)"),
+    is_active: Optional[int] = Query(None, ge=0, le=1, description="是否启用: 1启用, 0禁用"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    service: CustomerService = Depends(get_customer_service),
+):
+    """分页查询 pd_warehouse_payees 列表"""
+    result = service.list_warehouse_payees(
+        warehouse_name=warehouse_name,
+        payee_name=payee_name,
+        is_active=is_active,
+        page=page,
+        page_size=page_size,
+    )
+    if result.get("success"):
+        return result
+    raise HTTPException(status_code=500, detail=result.get("error", "查询库房收款员信息失败"))
+
+
 @router.get("/{customer_id}", response_model=CustomerOut)
 async def get_customer(
         customer_id: int,
@@ -162,3 +204,35 @@ async def delete_customer(
         return result
     else:
         raise HTTPException(status_code=400, detail=result.get("error"))
+
+@router.post("/warehouse-payees", summary="新增库房收款员信息")
+async def create_warehouse_payee(
+    request: WarehousePayeeCreateRequest,
+    service: CustomerService = Depends(get_customer_service),
+):
+    """新增 pd_warehouse_payees 记录"""
+    result = service.create_warehouse_payee(request.model_dump())
+    if result.get("success"):
+        return result
+    raise HTTPException(status_code=500, detail=result.get("error", "新增库房收款员信息失败"))
+
+
+@router.put("/warehouse-payees/{payee_id}", summary="编辑库房收款员信息")
+async def update_warehouse_payee(
+    payee_id: int,
+    request: WarehousePayeeUpdateRequest,
+    service: CustomerService = Depends(get_customer_service),
+):
+    """编辑 pd_warehouse_payees 指定字段"""
+    update_data = request.model_dump(exclude_unset=True)
+    result = service.update_warehouse_payee(payee_id, update_data)
+    if result.get("success"):
+        return result
+    error = result.get("error", "编辑库房收款员信息失败")
+    if "不存在" in str(error):
+        raise HTTPException(status_code=404, detail=error)
+    if "没有要更新的字段" in str(error):
+        raise HTTPException(status_code=400, detail=error)
+    raise HTTPException(status_code=500, detail=error)
+
+
