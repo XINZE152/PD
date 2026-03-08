@@ -294,11 +294,9 @@ class WeighbillService:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT 
-                            d.*,
-                            t.target_factory_name
+                        SELECT
+                            d.*
                         FROM pd_deliveries d
-                        LEFT JOIN pd_target_factory t ON d.target_factory_id = t.id
                         WHERE d.id = %s
                     """, (delivery_id,))
                     row = cur.fetchone()
