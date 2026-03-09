@@ -467,3 +467,392 @@ class AuthService:
         user_level = UserRole.HIERARCHY.get(user_role, 0)
         required_level = UserRole.HIERARCHY.get(required_role, 0)
         return user_level >= required_level
+
+
+# ========== 权限管理服务 ==========
+
+class PermissionService:
+    """用户权限管理服务"""
+
+    # 所有权限字段定义（用于动态操作）
+    PERMISSION_FIELDS = [
+        'perm_permission_manage',  # 权限管理权限
+        'perm_jinli_payment',  # 金利回款管理权限
+        'perm_yuguang_payment',  # 豫光回款管理权限
+        'perm_schedule',  # 排期管理权限
+        'perm_payout',  # 打款管理权限
+        'perm_payout_stats',  # 打款统计权限
+        'perm_report_stats',  # 统计与报表权限
+        'perm_contract_progress',  # 合同发运进度权限
+        'perm_contract_manage',  # 销售合同管理权限
+        'perm_customer_manage',  # 客户管理权限
+        'perm_delivery_manage',  # 报货管理权限
+        'perm_weighbill_manage',  # 磅单管理权限
+        'perm_warehouse_manage',  # 库房和收款人信息管理权限
+        'perm_account_manage',  # 账号管理权限
+        'perm_role_manage',  # 角色管理权限
+        'perm_ai_detect',  # AI检测权限
+        'perm_ai_predict',  # AI预测权限
+    ]
+
+    # 权限显示名称映射
+    PERMISSION_LABELS = {
+        'perm_permission_manage': '权限管理',
+        'perm_jinli_payment': '金利回款管理',
+        'perm_yuguang_payment': '豫光回款管理',
+        'perm_schedule': '排期管理',
+        'perm_payout': '打款管理',
+        'perm_payout_stats': '打款统计',
+        'perm_report_stats': '统计与报表',
+        'perm_contract_progress': '合同发运进度',
+        'perm_contract_manage': '销售合同管理',
+        'perm_customer_manage': '客户管理',
+        'perm_delivery_manage': '报货管理',
+        'perm_weighbill_manage': '磅单管理',
+        'perm_warehouse_manage': '库房和收款人信息管理',
+        'perm_account_manage': '账号管理',
+        'perm_role_manage': '角色管理',
+        'perm_ai_detect': 'AI检测',
+        'perm_ai_predict': 'AI预测',
+    }
+
+    # 角色权限模板（创建时默认权限）
+    ROLE_TEMPLATES = {
+        '管理员': {f: 1 for f in PERMISSION_FIELDS},  # 全部权限
+        '大区经理': {
+            'perm_schedule': 1,
+            'perm_payout': 1,
+            'perm_payout_stats': 1,
+            'perm_report_stats': 1,
+            'perm_contract_progress': 1,
+            'perm_contract_manage': 1,
+            'perm_customer_manage': 1,
+            'perm_delivery_manage': 1,
+            'perm_weighbill_manage': 1,
+            'perm_warehouse_manage': 1,
+            'perm_account_manage': 1,
+        },
+        '自营库管理': {
+            'perm_delivery_manage': 1,
+            'perm_weighbill_manage': 1,
+            'perm_warehouse_manage': 1,
+        },
+        '财务': {
+            'perm_jinli_payment': 1,
+            'perm_yuguang_payment': 1,
+            'perm_schedule': 1,
+            'perm_payout': 1,
+            'perm_payout_stats': 1,
+            'perm_report_stats': 1,
+        },
+        '会计': {
+            'perm_jinli_payment': 1,
+            'perm_yuguang_payment': 1,
+            'perm_report_stats': 1,
+        },
+    }
+
+    VALID_ROLES = ['管理员', '大区经理', '自营库管理', '财务', '会计']
+
+    @staticmethod
+    def ensure_table_exists():
+        """确保权限表存在"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pd_user_permissions (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        role VARCHAR(32) NOT NULL DEFAULT '会计',
+                        perm_permission_manage TINYINT DEFAULT 0,
+                        perm_jinli_payment TINYINT DEFAULT 0,
+                        perm_yuguang_payment TINYINT DEFAULT 0,
+                        perm_schedule TINYINT DEFAULT 0,
+                        perm_payout TINYINT DEFAULT 0,
+                        perm_payout_stats TINYINT DEFAULT 0,
+                        perm_report_stats TINYINT DEFAULT 0,
+                        perm_contract_progress TINYINT DEFAULT 0,
+                        perm_contract_manage TINYINT DEFAULT 0,
+                        perm_customer_manage TINYINT DEFAULT 0,
+                        perm_delivery_manage TINYINT DEFAULT 0,
+                        perm_weighbill_manage TINYINT DEFAULT 0,
+                        perm_warehouse_manage TINYINT DEFAULT 0,
+                        perm_account_manage TINYINT DEFAULT 0,
+                        perm_role_manage TINYINT DEFAULT 0,
+                        perm_ai_detect TINYINT DEFAULT 0,
+                        perm_ai_predict TINYINT DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        UNIQUE KEY uk_user_id (user_id),
+                        INDEX idx_role (role)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+
+    @staticmethod
+    def create_default_permissions(user_id: int, role: str) -> bool:
+        """
+        为新用户创建默认权限
+        """
+        if role not in PermissionService.VALID_ROLES:
+            role = '会计'
+
+        # 获取角色模板
+        template = PermissionService.ROLE_TEMPLATES.get(role, {})
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 检查是否已存在
+                cur.execute("SELECT id FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+                if cur.fetchone():
+                    return False
+
+                # 构建插入数据
+                fields = ['user_id', 'role'] + PermissionService.PERMISSION_FIELDS
+                values = [user_id, role]
+
+                for perm_field in PermissionService.PERMISSION_FIELDS:
+                    values.append(1 if perm_field in template else 0)
+
+                placeholders = ','.join(['%s'] * len(values))
+                fields_sql = ','.join(fields)
+
+                sql = f"INSERT INTO pd_user_permissions ({fields_sql}) VALUES ({placeholders})"
+                cur.execute(sql, tuple(values))
+                conn.commit()
+
+                logger.info(f"创建默认权限: user_id={user_id}, role={role}")
+                return True
+
+    @staticmethod
+    def get_user_permissions(user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        获取用户权限详情
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 获取用户基本信息
+                cur.execute("""
+                    SELECT id, name, account, role as base_role 
+                    FROM pd_users 
+                    WHERE id=%s AND status!=%s
+                """, (user_id, int(UserStatus.DELETED)))
+                user = cur.fetchone()
+
+                if not user:
+                    return None
+
+                # 获取权限配置
+                cur.execute("""
+                    SELECT * FROM pd_user_permissions 
+                    WHERE user_id=%s
+                """, (user_id,))
+                perm_row = cur.fetchone()
+
+                # 如果没有权限记录，创建默认
+                if not perm_row:
+                    PermissionService.create_default_permissions(user_id, user['base_role'])
+                    cur.execute("SELECT * FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+                    perm_row = cur.fetchone()
+
+                # 构建权限字典
+                permissions = {}
+                for field in PermissionService.PERMISSION_FIELDS:
+                    permissions[field] = bool(perm_row.get(field, 0)) if perm_row else False
+
+                # 添加显示名称
+                permissions_with_labels = {}
+                for field, value in permissions.items():
+                    permissions_with_labels[field] = {
+                        'value': value,
+                        'label': PermissionService.PERMISSION_LABELS.get(field, field)
+                    }
+
+                return {
+                    'user_id': user_id,
+                    'name': user['name'],
+                    'account': user['account'],
+                    'base_role': user['base_role'],  # pd_users表中的角色
+                    'current_role': perm_row['role'] if perm_row else user['base_role'],  # 权限表中的角色
+                    'role': perm_row['role'] if perm_row else user['base_role'],  # 当前生效角色
+                    'permissions': permissions,
+                    'permissions_with_labels': permissions_with_labels,
+                    'updated_at': str(perm_row['updated_at']) if perm_row else None
+                }
+
+    @staticmethod
+    def update_permissions(user_id: int, role: str = None, permissions: Dict[str, bool] = None) -> bool:
+        """
+        更新用户权限和角色
+
+        Args:
+            user_id: 用户ID
+            role: 新角色（可选）
+            permissions: 权限字典（可选，如 {'perm_schedule': True, 'perm_payout': False}）
+        """
+        # 验证角色
+        if role and role not in PermissionService.VALID_ROLES:
+            raise ValueError(f"无效的角色，可选: {PermissionService.VALID_ROLES}")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 检查权限记录是否存在
+                cur.execute("SELECT id FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+                perm_row = cur.fetchone()
+
+                if not perm_row:
+                    # 获取用户角色创建默认
+                    cur.execute("SELECT role FROM pd_users WHERE id=%s", (user_id,))
+                    user = cur.fetchone()
+                    if not user:
+                        raise ValueError("用户不存在")
+
+                    PermissionService.create_default_permissions(user_id, role or user['role'])
+                    cur.execute("SELECT id FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+                    perm_row = cur.fetchone()
+
+                # 构建更新
+                updates = []
+                params = []
+
+                # 更新角色
+                if role:
+                    updates.append("role=%s")
+                    params.append(role)
+
+                    # 如果更换角色，可以选择是否重置为角色模板
+                    # 这里不自动重置，保持原有权限逻辑
+
+                # 更新权限
+                if permissions:
+                    for perm_field, value in permissions.items():
+                        if perm_field in PermissionService.PERMISSION_FIELDS:
+                            updates.append(f"{perm_field}=%s")
+                            params.append(1 if value else 0)
+
+                if not updates:
+                    return True  # 无更新
+
+                params.append(user_id)
+                set_clause = ", ".join(updates)
+                sql = f"UPDATE pd_user_permissions SET {set_clause} WHERE user_id=%s"
+
+                cur.execute(sql, tuple(params))
+                conn.commit()
+
+                logger.info(f"更新权限: user_id={user_id}, updates={updates}")
+                return True
+
+    @staticmethod
+    def check_permission(user_id: int, permission_field: str) -> bool:
+        """
+        检查用户是否有指定权限
+        """
+        if permission_field not in PermissionService.PERMISSION_FIELDS:
+            return False
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT {permission_field} FROM pd_user_permissions 
+                    WHERE user_id=%s
+                """, (user_id,))
+                row = cur.fetchone()
+
+                if not row:
+                    return False
+
+                return bool(row.get(permission_field, 0))
+
+    @staticmethod
+    def list_all_permissions(page: int = 1, size: int = 20, role: str = None, keyword: str = None) -> Dict[str, Any]:
+        """
+        获取所有用户权限列表
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 构建查询条件
+                where_conditions = ["u.status != %s"]
+                params = [int(UserStatus.DELETED)]
+
+                if role:
+                    where_conditions.append("(p.role=%s OR (p.role IS NULL AND u.role=%s))")
+                    params.extend([role, role])
+
+                if keyword:
+                    where_conditions.append("(u.name LIKE %s OR u.account LIKE %s)")
+                    params.extend([f"%{keyword}%", f"%{keyword}%"])
+
+                where_clause = " AND ".join(where_conditions)
+
+                # 查询总数
+                count_sql = f"""
+                    SELECT COUNT(*) as total 
+                    FROM pd_users u
+                    LEFT JOIN pd_user_permissions p ON u.id=p.user_id
+                    WHERE {where_clause}
+                """
+                cur.execute(count_sql, tuple(params))
+                total = cur.fetchone()['total']
+
+                # 查询列表
+                offset = (page - 1) * size
+                select_sql = f"""
+                    SELECT 
+                        u.id as user_id,
+                        u.name,
+                        u.account,
+                        COALESCE(p.role, u.role) as role,
+                        {','.join([f'p.{f}' for f in PermissionService.PERMISSION_FIELDS])}
+                    FROM pd_users u
+                    LEFT JOIN pd_user_permissions p ON u.id=p.user_id
+                    WHERE {where_clause}
+                    ORDER BY u.created_at DESC
+                    LIMIT %s OFFSET %s
+                """
+                params.extend([size, offset])
+
+                cur.execute(select_sql, tuple(params))
+                rows = cur.fetchall()
+
+                # 处理结果
+                result_list = []
+                for row in rows:
+                    user_data = {
+                        'user_id': row['user_id'],
+                        'name': row['name'],
+                        'account': row['account'],
+                        'role': row['role'],
+                    }
+
+                    # 添加权限
+                    for field in PermissionService.PERMISSION_FIELDS:
+                        user_data[field] = bool(row.get(field, 0))
+
+                    # 添加权限标签
+                    user_data['permissions_list'] = [
+                        {
+                            'field': field,
+                            'label': PermissionService.PERMISSION_LABELS.get(field, field),
+                            'value': bool(row.get(field, 0))
+                        }
+                        for field in PermissionService.PERMISSION_FIELDS
+                    ]
+
+                    result_list.append(user_data)
+
+                return {
+                    "total": total,
+                    "page": page,
+                    "size": size,
+                    "pages": (total + size - 1) // size,
+                    "list": result_list
+                }
+
+    @staticmethod
+    def delete_permissions(user_id: int) -> bool:
+        """删除用户权限（用户删除时调用）"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+                conn.commit()
+                return True
