@@ -8,3 +8,4 @@ uploads/
 pd_fastapi_starter.egg-info/
 logs/
 .vscode/
+deploy/

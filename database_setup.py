@@ -62,39 +62,6 @@ def create_database_if_not_exists():
 TABLE_STATEMENTS = [
 	# ========== 原有表 ==========
 	"""
-	CREATE TABLE IF NOT EXISTS pd_summary (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-		contract_no VARCHAR(64) NOT NULL COMMENT '合同编号',
-		report_date DATE COMMENT '报货日期',
-		driver_phone VARCHAR(32) COMMENT '司机电话',
-		driver_name VARCHAR(64) COMMENT '司机姓名',
-		vehicle_no VARCHAR(32) COMMENT '车牌号',
-		product_name VARCHAR(64) COMMENT '货物品种',
-		weigh_date DATE COMMENT '过磅日期',
-		weigh_ticket_no VARCHAR(64) COMMENT '过磅单号',
-		net_weight DECIMAL(12, 3) COMMENT '净重（吨）',
-		unit_price DECIMAL(12, 2) COMMENT '单价（元/吨）',
-		amount DECIMAL(14, 2) COMMENT '金额',
-		planned_truck_count INT COMMENT '计划车数',
-		shipper VARCHAR(64) COMMENT '发货人',
-		payee VARCHAR(64) COMMENT '收款人',
-		other_fees DECIMAL(14, 2) COMMENT '其他费用',
-		amount_payable DECIMAL(14, 2) COMMENT '应付金额',
-		payment_schedule_date DATE COMMENT '排款日期',
-		remarks TEXT COMMENT '备注',
-		remittance_unit_price DECIMAL(12, 2) COMMENT '汇款单价',
-		remittance_amount DECIMAL(14, 2) COMMENT '汇款金额',
-		received_payment_date DATE COMMENT '到账日期',
-		arrival_payment_90 DECIMAL(14, 2) COMMENT '到货款90%',
-		final_payment_date DATE COMMENT '尾款日期',
-		final_payment_10 DECIMAL(14, 2) COMMENT '尾款10%',
-		payout_date DATE COMMENT '打款日期',
-		payout_details TEXT COMMENT '打款明细',
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='汇总台账表';
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS pd_users (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
 		name VARCHAR(64) NOT NULL COMMENT '姓名',
@@ -210,38 +177,10 @@ TABLE_STATEMENTS = [
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='磅单表';
 	""",
 	"""
-	CREATE TABLE IF NOT EXISTS pd_weighbill_settlements (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-		payable_amount DECIMAL(14, 2) COMMENT '应付金额',
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='磅单结算汇总表';
-	""",
-	"""
-	CREATE TABLE IF NOT EXISTS pd_receipts (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-		remittance_amount DECIMAL(14, 2) COMMENT '汇款金额',
-		received_payment_date DATE COMMENT '到账日期',
-		arrival_payment_90 DECIMAL(14, 2) COMMENT '到货款90%',
-		final_payment_date DATE COMMENT '尾款日期',
-		final_payment_10 DECIMAL(14, 2) COMMENT '尾款10%',
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收款汇总表';
-	""",
-	"""
-	CREATE TABLE IF NOT EXISTS pd_payout_details (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-		payout_amount DECIMAL(14, 2) COMMENT '打款金额',
-		payout_details TEXT COMMENT '打款明细',
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='打款明细表';
-	""",
-	"""
 	CREATE TABLE IF NOT EXISTS pd_warehouse_payees (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
 		warehouse_name VARCHAR(64) NOT NULL COMMENT '库房名称',
+		regional_manager VARCHAR(64) COMMENT '大区经理',
 		payee_name VARCHAR(64) NOT NULL COMMENT '收款人姓名',
 		payee_account VARCHAR(32) NOT NULL COMMENT '收款账号',
 		payee_bank_name VARCHAR(64) COMMENT '收款银行名称',
