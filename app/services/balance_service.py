@@ -1737,6 +1737,145 @@ class BalanceService:
         except Exception as e:
             logger.error(f"查询分组结余列表失败: {e}")
             return {"success": False, "error": str(e), "data": [], "total": 0}
+
+    # ========== 按报单人/发货人汇总统计 ==========
+
+    def list_balance_summary_by_reporter(
+            self,
+            reporter_name: str = None,
+            fuzzy_keywords: str = None,
+            min_balance: float = 0.01,
+            payment_status: int = None,
+            page: int = 1,
+            page_size: int = 20,
+            _retry_count: int = 0
+    ) -> Dict[str, Any]:
+        """
+        按报单人/发货人汇总统计结余
+        """
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    where_clauses = ["1=1"]
+                    params = []
+
+                    if reporter_name:
+                        where_clauses.append("COALESCE(d.reporter_name, d.shipper) = %s")
+                        params.append(reporter_name)
+
+                    if payment_status is not None:
+                        where_clauses.append("b.payment_status = %s")
+                        params.append(payment_status)
+                    else:
+                        where_clauses.append("b.payment_status IN (0, 1)")
+
+                    if min_balance is not None:
+                        where_clauses.append("b.balance_amount >= %s")
+                        params.append(min_balance)
+
+                    if fuzzy_keywords:
+                        tokens = [t for t in fuzzy_keywords.split() if t]
+                        or_clauses = []
+                        for token in tokens:
+                            like = f"%{token}%"
+                            or_clauses.append(
+                                "(COALESCE(d.reporter_name, d.shipper) LIKE %s "
+                                "OR b.driver_phone LIKE %s OR b.vehicle_no LIKE %s OR b.contract_no LIKE %s)"
+                            )
+                            params.extend([like, like, like, like])
+                        if or_clauses:
+                            where_clauses.append("(" + " OR ".join(or_clauses) + ")")
+
+                    where_sql = " AND ".join(where_clauses)
+
+                    count_sql = f"""
+                        SELECT COUNT(*) FROM (
+                            SELECT COALESCE(d.reporter_name, d.shipper) as reporter_name
+                            FROM pd_balance_details b
+                            LEFT JOIN pd_deliveries d ON d.id = b.delivery_id
+                            WHERE {where_sql}
+                            GROUP BY COALESCE(d.reporter_name, d.shipper)
+                        ) t
+                    """
+                    cur.execute(count_sql, tuple(params))
+                    total = cur.fetchone()[0]
+
+                    offset = (page - 1) * page_size
+                    query_sql = f"""
+                        SELECT 
+                            COALESCE(d.reporter_name, d.shipper) as reporter_name,
+                            COUNT(*) as bill_count,
+                            SUM(b.payable_amount) as total_payable,
+                            SUM(b.paid_amount) as total_paid,
+                            SUM(b.balance_amount) as total_balance,
+                            GROUP_CONCAT(DISTINCT b.contract_no ORDER BY b.contract_no SEPARATOR ', ') as related_contracts,
+                            GROUP_CONCAT(DISTINCT b.vehicle_no ORDER BY b.vehicle_no SEPARATOR ', ') as related_vehicles,
+                            MIN(b.created_at) as first_bill_date,
+                            MAX(b.created_at) as last_bill_date,
+                            SUM(CASE WHEN b.payment_status = 0 THEN 1 ELSE 0 END) as pending_count,
+                            SUM(CASE WHEN b.payment_status = 1 THEN 1 ELSE 0 END) as partial_count
+                        FROM pd_balance_details b
+                        LEFT JOIN pd_deliveries d ON d.id = b.delivery_id
+                        WHERE {where_sql}
+                        GROUP BY COALESCE(d.reporter_name, d.shipper)
+                        ORDER BY total_balance DESC, last_bill_date DESC
+                        LIMIT %s OFFSET %s
+                    """
+                    cur.execute(query_sql, tuple(params + [page_size, offset]))
+
+                    columns = [desc[0] for desc in cur.description]
+                    data = []
+                    for row in cur.fetchall():
+                        item = dict(zip(columns, row))
+
+                        for key in ['total_payable', 'total_paid', 'total_balance']:
+                            if item.get(key) is not None:
+                                item[key] = float(item[key])
+
+                        for key in ['first_bill_date', 'last_bill_date']:
+                            if item.get(key):
+                                item[key] = str(item[key])
+
+                        pending = item.get('pending_count', 0)
+                        partial = item.get('partial_count', 0)
+                        if pending > 0 and partial > 0:
+                            item['status_summary'] = f"{pending}笔待支付,{partial}笔部分支付"
+                        elif pending > 0:
+                            item['status_summary'] = f"{pending}笔待支付"
+                        elif partial > 0:
+                            item['status_summary'] = f"{partial}笔部分支付"
+                        else:
+                            item['status_summary'] = "全部结清"
+
+                        data.append(item)
+
+                    return {
+                        "success": True,
+                        "data": data,
+                        "total": total,
+                        "page": page,
+                        "page_size": page_size,
+                        "summary": {
+                            "total_reporters": total,
+                            "total_balance": sum(d.get('total_balance', 0) for d in data)
+                        }
+                    }
+
+        except Exception as e:
+            if "Packet sequence number wrong" in str(e) and _retry_count < 1:
+                logger.warning(f"按报单人汇总查询触发重试: {e}")
+                return self.list_balance_summary_by_reporter(
+                    reporter_name=reporter_name,
+                    fuzzy_keywords=fuzzy_keywords,
+                    min_balance=min_balance,
+                    payment_status=payment_status,
+                    page=page,
+                    page_size=page_size,
+                    _retry_count=_retry_count + 1
+                )
+
+            logger.error(f"按报单人汇总查询失败: {e}")
+            return {"success": False, "error": str(e), "data": [], "total": 0}
     def get_payee_balance_details(
             self,
             payee_name: str,
@@ -1845,6 +1984,112 @@ class BalanceService:
 
         except Exception as e:
             logger.error(f"查询收款人明细失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_reporter_balance_details(
+            self,
+            reporter_name: str,
+            payment_status: int = None,
+            page: int = 1,
+            page_size: int = 20
+    ) -> Dict[str, Any]:
+        """
+        获取指定报单人/发货人的具体结余明细列表
+        """
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    where_sql = "COALESCE(d.reporter_name, d.shipper) = %s"
+                    params = [reporter_name]
+
+                    if payment_status is not None:
+                        where_sql += " AND b.payment_status = %s"
+                        params.append(payment_status)
+
+                    cur.execute(f"""
+                        SELECT 
+                            COALESCE(d.reporter_name, d.shipper) as reporter_name,
+                            COUNT(*) as total_bills,
+                            SUM(b.payable_amount) as total_payable,
+                            SUM(b.paid_amount) as total_paid,
+                            SUM(b.balance_amount) as total_balance
+                        FROM pd_balance_details b
+                        LEFT JOIN pd_deliveries d ON d.id = b.delivery_id
+                        WHERE {where_sql}
+                        GROUP BY COALESCE(d.reporter_name, d.shipper)
+                    """, tuple(params))
+
+                    summary_row = cur.fetchone()
+                    if not summary_row:
+                        return {"success": False, "error": "报单人不存在或无结余记录"}
+
+                    summary_columns = [desc[0] for desc in cur.description]
+                    summary = dict(zip(summary_columns, summary_row))
+
+                    for key in ['total_payable', 'total_paid', 'total_balance']:
+                        if summary.get(key) is not None:
+                            summary[key] = float(summary[key])
+
+                    count_sql = f"""
+                        SELECT COUNT(*)
+                        FROM pd_balance_details b
+                        LEFT JOIN pd_deliveries d ON d.id = b.delivery_id
+                        WHERE {where_sql}
+                    """
+                    cur.execute(count_sql, tuple(params))
+                    total = cur.fetchone()[0]
+
+                    offset = (page - 1) * page_size
+                    detail_sql = f"""
+                        SELECT 
+                            b.*,
+                            w.weighbill_image,
+                            w.weigh_date,
+                            w.vehicle_no as weigh_vehicle_no,
+                            w.product_name as weigh_product_name,
+                            w.net_weight as weigh_net_weight,
+                            d.reporter_name,
+                            d.shipper
+                        FROM pd_balance_details b
+                        LEFT JOIN pd_weighbills w ON b.weighbill_id = w.id
+                        LEFT JOIN pd_deliveries d ON d.id = b.delivery_id
+                        WHERE {where_sql}
+                        ORDER BY b.created_at DESC
+                        LIMIT %s OFFSET %s
+                    """
+
+                    cur.execute(detail_sql, tuple(params + [page_size, offset]))
+
+                    columns = [desc[0] for desc in cur.description]
+                    details = []
+                    status_map = {0: "待支付", 1: "部分支付", 2: "已结清"}
+
+                    for row in cur.fetchall():
+                        item = dict(zip(columns, row))
+
+                        for key in ['created_at', 'updated_at', 'weigh_date']:
+                            if item.get(key):
+                                item[key] = str(item[key])
+
+                        for key in ['payable_amount', 'paid_amount', 'balance_amount']:
+                            if item.get(key) is not None:
+                                item[key] = float(item[key])
+
+                        item['payment_status_name'] = status_map.get(item.get('payment_status'), "未知")
+
+                        details.append(item)
+
+                    return {
+                        "success": True,
+                        "summary": summary,
+                        "details": details,
+                        "total": total,
+                        "page": page,
+                        "page_size": page_size
+                    }
+
+        except Exception as e:
+            logger.error(f"查询报单人明细失败: {e}")
             return {"success": False, "error": str(e)}
 
     def batch_verify_by_payee(

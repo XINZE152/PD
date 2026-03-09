@@ -153,6 +153,22 @@ class PayeeSummaryOut(BaseModel):
     status_summary: str
 
 
+class ReporterSummaryOut(BaseModel):
+    """报单人/发货人汇总响应模型"""
+    reporter_name: str
+    bill_count: int
+    total_payable: float
+    total_paid: float
+    total_balance: float
+    related_contracts: Optional[str] = None
+    related_vehicles: Optional[str] = None
+    first_bill_date: Optional[str] = None
+    last_bill_date: Optional[str] = None
+    pending_count: int
+    partial_count: int
+    status_summary: str
+
+
 class PayeeDetailSummary(BaseModel):
     """收款人明细汇总"""
     driver_name: str
@@ -655,6 +671,39 @@ async def list_balance_by_payee(
         raise HTTPException(status_code=400, detail=result.get("error"))
 
 
+@router.get("/summary/by-shipper", response_model=dict)
+async def list_balance_by_reporter(
+        reporter_name: Optional[str] = Query(None, description="精确报单人/发货人"),
+        fuzzy_keywords: Optional[str] = Query(None, description="模糊关键词（姓名/电话/车牌/合同号）"),
+        min_balance: Optional[float] = Query(0.01, description="最小结余金额，默认0.01"),
+        payment_status: Optional[int] = Query(None, description="0=待支付, 1=部分支付, 不传则显示有结余的"),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        service: BalanceService = Depends(get_balance_service)
+):
+    """
+    按报单人/发货人汇总统计结余
+
+    返回每个报单人的：
+    - 磅单数
+    - 总应付、总已付、总结余
+    - 关联合同、车牌
+    """
+    result = service.list_balance_summary_by_reporter(
+        reporter_name=reporter_name,
+        fuzzy_keywords=fuzzy_keywords,
+        min_balance=min_balance,
+        payment_status=payment_status,
+        page=page,
+        page_size=page_size
+    )
+
+    if result["success"]:
+        return result
+    else:
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+
 @router.get("/summary/by-payee/{payee_name}/details", response_model=dict)
 async def get_payee_balance_details(
         payee_name: str,
@@ -708,6 +757,32 @@ async def batch_verify_by_payee(
         return result
     else:
         raise HTTPException(status_code=400, detail=result.get("error"))
+
+
+@router.get("/summary/by-shipper/{reporter_name}/details", response_model=dict)
+async def get_reporter_balance_details(
+        reporter_name: str,
+        payment_status: Optional[int] = Query(None, description="0=待支付, 1=部分支付"),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        service: BalanceService = Depends(get_balance_service)
+):
+    """
+    查看指定报单人的具体结余明细列表
+
+    点击汇总行的"查看明细"后调用，显示该报单人的所有具体账单
+    """
+    result = service.get_reporter_balance_details(
+        reporter_name=reporter_name,
+        payment_status=payment_status,
+        page=page,
+        page_size=page_size
+    )
+
+    if result["success"]:
+        return result
+    else:
+        raise HTTPException(status_code=404, detail=result.get("error"))
 @router.get("/{balance_id}", response_model=BalanceOut)
 async def get_balance(
         balance_id: int,
