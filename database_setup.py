@@ -82,6 +82,42 @@ TABLE_STATEMENTS = [
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 	""",
 	"""
+	CREATE TABLE IF NOT EXISTS pd_user_permissions (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY,
+		user_id BIGINT NOT NULL COMMENT '用户ID（关联pd_users.id）',
+	
+		-- 角色字段（单选）
+		role VARCHAR(32) NOT NULL DEFAULT '会计' COMMENT '角色：管理员/大区经理/自营库管理/财务/会计',
+	
+		-- 权限字段（布尔值，1=有权限，0=无权限）
+		perm_permission_manage TINYINT DEFAULT 0 COMMENT '权限管理权限',
+		perm_jinli_payment TINYINT DEFAULT 0 COMMENT '金利回款管理权限',
+		perm_yuguang_payment TINYINT DEFAULT 0 COMMENT '豫光回款管理权限',
+		perm_schedule TINYINT DEFAULT 0 COMMENT '排期管理权限',
+		perm_payout TINYINT DEFAULT 0 COMMENT '打款管理权限',
+		perm_payout_stats TINYINT DEFAULT 0 COMMENT '打款统计权限',
+		perm_report_stats TINYINT DEFAULT 0 COMMENT '统计与报表权限',
+		perm_contract_progress TINYINT DEFAULT 0 COMMENT '合同发运进度权限',
+		perm_contract_manage TINYINT DEFAULT 0 COMMENT '销售合同管理权限',
+		perm_customer_manage TINYINT DEFAULT 0 COMMENT '客户管理权限',
+		perm_delivery_manage TINYINT DEFAULT 0 COMMENT '报货管理权限',
+		perm_weighbill_manage TINYINT DEFAULT 0 COMMENT '磅单管理权限',
+		perm_warehouse_manage TINYINT DEFAULT 0 COMMENT '库房和收款人信息管理权限',
+		perm_account_manage TINYINT DEFAULT 0 COMMENT '账号管理权限',
+		perm_role_manage TINYINT DEFAULT 0 COMMENT '角色管理权限',
+		perm_ai_detect TINYINT DEFAULT 0 COMMENT 'AI检测权限',
+		perm_ai_predict TINYINT DEFAULT 0 COMMENT 'AI预测权限',
+	
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+	
+		UNIQUE KEY uk_user_id (user_id),
+		INDEX idx_role (role),
+	
+		FOREIGN KEY (user_id) REFERENCES pd_users(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户权限配置表';
+	""",
+	"""
 	CREATE TABLE IF NOT EXISTS pd_customers (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
 		smelter_name VARCHAR(128) NOT NULL COMMENT '冶炼厂名称',

@@ -1,7 +1,9 @@
 from fastapi import HTTPException, APIRouter, Depends
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
+from enum import IntEnum
+from fastapi.security import HTTPBearer
 from core.database import get_conn
 from core.logging import get_logger
 from core.table_access import build_dynamic_select
@@ -10,10 +12,13 @@ from services.pd_auth_service import (
     AuthService, 
     UserStatus, 
     UserRole,
+    verify_pwd,
+    hash_pwd,
+    PermissionService,  # 新增导入
 )
 
 logger = get_logger(__name__)
-
+security = HTTPBearer(auto_error=False)
 
 # ========== Pydantic 模型定义 ==========
 
@@ -74,6 +79,21 @@ class UserResp(BaseModel):
     updated_at: datetime
 
 
+# ========== 新增：权限管理模型 ==========
+
+class PermissionUpdateReq(BaseModel):
+    role: Optional[str] = Field(None, description="角色：管理员/大区经理/自营库管理/财务/会计")
+    permissions: Optional[Dict[str, bool]] = Field(None,
+                                                   description="权限字典，如 {'perm_schedule': true, 'perm_payout': false}")
+
+
+class PermissionListQuery(BaseModel):
+    page: int = Field(1, ge=1, description="页码")
+    size: int = Field(20, ge=1, le=100, description="每页数量")
+    role: Optional[str] = Field(None, description="按角色筛选")
+    keyword: Optional[str] = Field(None, description="关键词搜索（姓名/账号）")
+
+
 # ========== 路由定义 ==========
 
 router = APIRouter(tags=["PD用户认证"])
@@ -81,7 +101,18 @@ router = APIRouter(tags=["PD用户认证"])
 
 def register_pd_auth_routes(app):
     """注册用户认证路由到主应用"""
-    app.include_router(router, prefix="/api/v1/user")
+    app.include_router(
+        router,
+        prefix="/api/v1/user",
+        dependencies=[Depends(security)]   # 添加这行
+    )
+
+    # 新增：确保权限表存在
+    try:
+        PermissionService.ensure_table_exists()
+        logger.info("权限表初始化检查完成")
+    except Exception as e:
+        logger.warning(f"权限表初始化检查: {e}")
 
 
 def _err(msg: str, code: int = 400):
@@ -267,6 +298,13 @@ def create_user(
             email=body.email,
             created_by=current_user["id"]
         )
+
+        # 新增：自动创建默认权限
+        try:
+            PermissionService.create_default_permissions(user_id, body.role)
+        except Exception as e:
+            logger.warning(f"创建默认权限失败: {e}")
+
         return {"msg": "创建成功", "user_id": user_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -342,6 +380,17 @@ def update_user(
     
     try:
         AuthService.update_user(user_id, **body.model_dump(exclude_none=True))
+
+        # 新增：如果修改了角色，同步更新权限表
+        if body.role:
+            try:
+                PermissionService.update_permissions(user_id, role=body.role)
+                # 重置为角色默认模板
+                PermissionService.delete_permissions(user_id)
+                PermissionService.create_default_permissions(user_id, body.role)
+            except Exception as e:
+                logger.warning(f"同步更新权限失败: {e}")
+
         return {"msg": "更新成功"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -362,6 +411,12 @@ def delete_user(
     check_admin_permission(current_user)
     
     try:
+        # 新增：先删除权限记录
+        try:
+            PermissionService.delete_permissions(user_id)
+        except Exception as e:
+            logger.warning(f"删除权限记录失败: {e}")
+
         AuthService.delete_user(user_id)
         return {"msg": "用户已删除"}
     except ValueError as e:
@@ -445,4 +500,209 @@ def get_roles():
             {"code": "财务", "name": "财务", "description": "处理财务相关操作"},
             {"code": "会计", "name": "会计", "description": "查看财务数据"}
         ]
+    }
+
+
+# ========== 新增：权限管理接口 ==========
+
+@router.get("/permissions", summary="获取所有用户权限列表")
+def list_permissions(
+        page: int = 1,
+        size: int = 20,
+        role: Optional[str] = None,
+        keyword: Optional[str] = None,
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    获取所有用户的权限列表（需要权限管理权限或管理员）
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限查看权限列表")
+
+    result = PermissionService.list_all_permissions(
+        page=page,
+        size=size,
+        role=role,
+        keyword=keyword
+    )
+    return result
+
+
+@router.get("/permissions/me", summary="获取当前用户权限")
+def get_my_permissions(current_user: dict = Depends(get_current_user)):
+    """
+    获取当前登录用户的权限详情
+    """
+    result = PermissionService.get_user_permissions(current_user["id"])
+    if not result:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return {
+        "success": True,
+        "data": result
+    }
+
+
+@router.get("/permissions/{user_id}", summary="获取指定用户权限")
+def get_user_permission(
+        user_id: int,
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    获取指定用户的权限详情
+    - 管理员可查看任何人
+    - 其他人只能查看自己
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员" and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="只能查看自己的权限")
+
+    result = PermissionService.get_user_permissions(user_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return {
+        "success": True,
+        "data": result
+    }
+
+
+@router.put("/permissions/{user_id}", summary="修改用户权限和角色")
+def update_user_permission(
+        user_id: int,
+        body: PermissionUpdateReq,
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    修改指定用户的权限和角色
+
+    **权限要求：**
+    - 需要 `perm_permission_manage` 权限或管理员角色
+    - 不能修改自己的角色（需由其他管理员修改）
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限修改用户权限")
+
+    # 不能修改自己的角色
+    if user_id == current_user["id"] and body.role:
+        raise HTTPException(status_code=400, detail="不能修改自己的角色，请联系其他管理员")
+
+    try:
+        PermissionService.update_permissions(
+            user_id=user_id,
+            role=body.role,
+            permissions=body.permissions
+        )
+
+        # 如果修改了角色，同步更新pd_users表
+        if body.role:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE pd_users SET role=%s WHERE id=%s",
+                        (body.role, user_id)
+                    )
+                    conn.commit()
+
+        return {
+            "success": True,
+            "message": "权限更新成功"
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("更新权限失败")
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
+
+
+@router.get("/permissions/roles/templates", summary="获取角色权限模板")
+def get_role_templates(current_user: dict = Depends(get_current_user)):
+    """
+    获取各角色的默认权限模板
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限查看")
+
+    templates = {}
+    for role, perms in PermissionService.ROLE_TEMPLATES.items():
+        templates[role] = {
+            'role': role,
+            'permissions': [
+                {
+                    'field': field,
+                    'label': PermissionService.PERMISSION_LABELS.get(field, field),
+                    'value': True
+                }
+                for field in perms.keys()
+            ],
+            'all_permissions': [
+                {
+                    'field': field,
+                    'label': PermissionService.PERMISSION_LABELS.get(field, field),
+                    'value': field in perms
+                }
+                for field in PermissionService.PERMISSION_FIELDS
+            ]
+        }
+
+    return {
+        "success": True,
+        "data": templates,
+        "valid_roles": PermissionService.VALID_ROLES,
+        "permission_fields": [
+            {
+                'field': field,
+                'label': PermissionService.PERMISSION_LABELS.get(field, field)
+            }
+            for field in PermissionService.PERMISSION_FIELDS
+        ]
+    }
+
+
+@router.post("/permissions/{user_id}/reset", summary="重置用户权限为角色模板")
+def reset_user_permissions(
+        user_id: int,
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    重置用户权限为角色默认模板
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限重置权限")
+
+    # 不能重置自己
+    if user_id == current_user["id"]:
+        raise HTTPException(status_code=400, detail="不能重置自己的权限")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # 获取当前角色
+            cur.execute("SELECT role FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="用户权限记录不存在")
+
+            role = row['role']
+
+            # 删除旧权限
+            cur.execute("DELETE FROM pd_user_permissions WHERE user_id=%s", (user_id,))
+
+            # 重新创建默认权限
+            PermissionService.create_default_permissions(user_id, role)
+
+            conn.commit()
+
+    return {
+        "success": True,
+        "message": f"权限已重置为【{role}】角色默认模板"
     }
