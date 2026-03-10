@@ -718,9 +718,9 @@ class PaymentService:
                 # 查询总数
                 count_sql = f"""
                     SELECT COUNT(*) as total 
-                    FROM pd_weighbills wb
-                    LEFT JOIN pd_deliveries d ON d.id = wb.delivery_id
-                    LEFT JOIN {PaymentService.TABLE_NAME} pd ON pd.weighbill_id = wb.id
+                    FROM {PaymentService.TABLE_NAME} pd
+                    LEFT JOIN pd_weighbills wb ON wb.id = pd.weighbill_id
+                    LEFT JOIN pd_deliveries d ON d.id = COALESCE(pd.delivery_id, wb.delivery_id)
                     WHERE {where_sql}
                 """
                 cur.execute(count_sql, tuple(params))
@@ -731,13 +731,13 @@ class PaymentService:
                 query_sql = f"""
                     SELECT 
                         -- ========== 第一行：基础信息 ==========
-                        COALESCE(pd.contract_no, d.contract_no) as 合同编号,
+                        pd.contract_no as 合同编号,
                         d.report_date as 报单日期,
-                        d.target_factory_name as 报送冶炼厂,
+                        pd.smelter_name as 报送冶炼厂,
                         d.driver_phone as 司机电话,
                         d.driver_name as 司机姓名,
-                        wb.vehicle_no as 车号,
-                        wb.product_name as 品种,
+                        COALESCE(wb.vehicle_no, d.vehicle_no) as 车号,
+                        COALESCE(wb.product_name, d.product_name, pd.material_name) as 品种,
                         d.has_delivery_order as 是否自带联单,
                         d.upload_status as 是否上传联单,
                         d.shipper as 报单人发货人,
@@ -768,18 +768,18 @@ class PaymentService:
                         -- ========== 其他必要字段 ==========
                         pd.id as payment_detail_id,
                         wb.id as weighbill_id,
-                        d.id as delivery_id,
+                        COALESCE(pd.delivery_id, d.id) as delivery_id,
                         pd.total_amount as 应收总额,
                         pd.paid_amount as 已回款总额,
                         pd.unpaid_amount as 未回款金额,
                         pd.created_at,
                         pd.updated_at
                         
-                    FROM pd_weighbills wb
-                    LEFT JOIN pd_deliveries d ON d.id = wb.delivery_id
-                    LEFT JOIN {PaymentService.TABLE_NAME} pd ON pd.weighbill_id = wb.id
+                    FROM {PaymentService.TABLE_NAME} pd
+                    LEFT JOIN pd_weighbills wb ON wb.id = pd.weighbill_id
+                    LEFT JOIN pd_deliveries d ON d.id = COALESCE(pd.delivery_id, wb.delivery_id)
                     WHERE {where_sql}
-                    ORDER BY wb.created_at DESC
+                    ORDER BY pd.created_at DESC
                     LIMIT %s OFFSET %s
                 """
 
