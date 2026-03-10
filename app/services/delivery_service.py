@@ -46,6 +46,26 @@ class DeliveryService:
 
         return raw
 
+    def _normalize_upload_status(self, value: Optional[str]) -> Optional[str]:
+        """将上传状态统一为数据库可接受值：已上传/待上传。"""
+        if value is None:
+            return None
+
+        raw = str(value).strip()
+        if raw == "":
+            return None
+
+        positive = {"已上传", "上传", "是", "true", "1", "uploaded"}
+        negative = {"待上传", "未上传", "未上传联单", "否", "false", "0", "pending"}
+
+        low = raw.lower()
+        if raw in positive or low in positive:
+            return "已上传"
+        if raw in negative or low in negative:
+            return "待上传"
+
+        return raw
+
     def _delivery_has_products_column(self) -> bool:
         """兼容旧库：动态检测 pd_deliveries 是否存在 products 列。"""
         cached = getattr(self, "_products_column_exists", None)
@@ -954,9 +974,10 @@ class DeliveryService:
                         where_clauses.append("has_delivery_order = %s")
                         params.append(exact_has_delivery_order)
 
-                    if exact_upload_status:
+                    normalized_upload_status = self._normalize_upload_status(exact_upload_status)
+                    if normalized_upload_status:
                         where_clauses.append("upload_status = %s")
-                        params.append(exact_upload_status)
+                        params.append(normalized_upload_status)
 
                     if exact_reporter_name:
                         where_clauses.append("reporter_name = %s")

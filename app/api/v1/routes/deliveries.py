@@ -218,7 +218,7 @@ async def list_deliveries(
     exact_driver_name: Optional[str] = Query(None, description="精确司机姓名"),
     exact_vehicle_no: Optional[str] = Query(None, description="精确车号"),
     exact_has_delivery_order: Optional[str] = Query(None, description="是否自带联单：有/无"),
-    exact_upload_status: Optional[str] = Query(None, description="是否上传联单：已上传/待上传"),
+    exact_upload_status: Optional[str] = Query(None, description="是否上传联单：已上传/未上传"),
     exact_reporter_name: Optional[str] = Query(None, description="精确报单人姓名"),  # 新增
     exact_reporter_id: Optional[int] = Query(None, description="精确报单人ID"),  # 新增
     exact_factory_name: Optional[str] = Query(None, description="精确目标工厂"),
