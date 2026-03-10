@@ -632,6 +632,7 @@ def get_role_templates(current_user: dict = Depends(get_current_user)):
 
     # 从数据库获取模板
     templates_data = PermissionService.get_all_role_templates()
+    permission_fields = PermissionService.get_all_fields()
 
     templates = {}
     for role, perms in templates_data.items():
@@ -640,10 +641,10 @@ def get_role_templates(current_user: dict = Depends(get_current_user)):
             'permissions': [
                 {
                     'field': field,
-                    'label': PermissionService.PERMISSION_LABELS.get(field, field),
+                    'label': PermissionService.get_label(field),
                     'value': bool(perms.get(field, 0))
                 }
-                for field in PermissionService.PERMISSION_FIELDS
+                for field in permission_fields
             ]
         }
 
@@ -654,9 +655,9 @@ def get_role_templates(current_user: dict = Depends(get_current_user)):
         "permission_fields": [
             {
                 'field': field,
-                'label': PermissionService.PERMISSION_LABELS.get(field, field)
+                'label': PermissionService.get_label(field)
             }
-            for field in PermissionService.PERMISSION_FIELDS
+            for field in permission_fields
         ]
     }
 
@@ -683,7 +684,8 @@ def update_role_template(
         raise HTTPException(status_code=400, detail="管理员角色必须拥有所有权限，不可修改")
 
     # 验证权限字段
-    invalid_perms = [p for p in permissions.keys() if p not in PermissionService.PERMISSION_FIELDS]
+    valid_permission_fields = set(PermissionService.get_all_fields())
+    invalid_perms = [p for p in permissions.keys() if p not in valid_permission_fields]
     if invalid_perms:
         raise HTTPException(status_code=400, detail=f"无效的权限字段: {invalid_perms}")
 

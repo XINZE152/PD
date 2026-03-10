@@ -1231,6 +1231,30 @@ class PaymentService:
                 if not detail:
                     raise ValueError("收款明细不存在")
 
+                cur.execute(f"SHOW COLUMNS FROM {PaymentService.TABLE_NAME} LIKE 'updated_at'")
+                has_detail_updated_at = cur.fetchone() is not None
+                cur.execute(f"SHOW COLUMNS FROM {PaymentService.RECORD_TABLE} LIKE 'updated_at'")
+                has_record_updated_at = cur.fetchone() is not None
+
+                cur.execute(f"""
+                    SELECT payment_stage, payment_date
+                    FROM {PaymentService.RECORD_TABLE}
+                    WHERE payment_detail_id = %s
+                """, (payment_id,))
+                record_rows = cur.fetchall()
+
+                existing_arrival_date = None
+                existing_final_date = None
+                for record in record_rows:
+                    payment_stage = record.get("payment_stage") if isinstance(record, dict) else record[0]
+                    payment_date_value = record.get("payment_date") if isinstance(record, dict) else record[1]
+                    if payment_date_value:
+                        payment_date_value = str(payment_date_value)
+                    if payment_stage == 0 and payment_date_value:
+                        existing_arrival_date = payment_date_value
+                    if payment_stage == 2 and payment_date_value:
+                        existing_final_date = payment_date_value
+
                 total_amount = Decimal(str(detail["total_amount"]))
                 smelter_name = detail["smelter_name"] or ""
                 is_jinli = "金利" in smelter_name
@@ -1267,27 +1291,25 @@ class PaymentService:
 
                 if is_jinli:
 
-                    arrival_date = arrival_payment_date or payment_date
+                    arrival_date = arrival_payment_date or payment_date or existing_arrival_date
 
                     # 首笔日期必须填写
                     if new_arrival > 0 and not arrival_date:
                         raise ValueError("金利首笔回款必须填写回款日期")
 
-                    # 尾款日期必须填写
-                    if new_final > 0 and not final_payment_date:
-                        raise ValueError("金利尾款回款必须填写回款日期")
-
-                    final_date = final_payment_date
+                    final_date = final_payment_date or existing_final_date
                     # 金利：尾款日期
                     if final_payment_date:
                         final_date = final_payment_date
                     elif payment_date and new_final > cur_final:
                         final_date = payment_date
-                    else:
-                        final_date = datetime.now().strftime('%Y-%m-%d') if new_final > 0 else None
+
+                    # 尾款日期必须填写；如果此前已录入过尾款日期，则允许沿用
+                    if new_final > 0 and not final_date:
+                        raise ValueError("金利尾款回款必须填写回款日期")
                 else:
                     # 豫光：只有一个日期
-                    single_date = arrival_payment_date or payment_date
+                    single_date = arrival_payment_date or payment_date or existing_arrival_date
 
                     if new_arrival > 0 and not single_date:
                         raise ValueError("回款必须填写日期")
@@ -1312,8 +1334,7 @@ class PaymentService:
                     "unpaid_amount = %s",
                     "collection_status = %s",
                     "status = %s",
-                    "is_paid = CASE WHEN %s > 0 THEN 1 ELSE 0 END",
-                    "updated_at = %s"
+                    "is_paid = CASE WHEN %s > 0 THEN 1 ELSE 0 END"
                 ]
                 params = [
                     float(new_arrival),
@@ -1322,9 +1343,12 @@ class PaymentService:
                     float(new_unpaid),
                     collection_status,
                     int(payment_status),
-                    float(new_paid),
-                    datetime.now()
+                    float(new_paid)
                 ]
+
+                if has_detail_updated_at:
+                    update_fields.append("updated_at = %s")
+                    params.append(datetime.now())
                 
                 # 检查并更新日期字段
                 cur.execute(f"SHOW COLUMNS FROM {PaymentService.TABLE_NAME} LIKE 'arrival_payment_date'")
@@ -1362,22 +1386,27 @@ class PaymentService:
                     
                     if arrival_record:
                         # 更新现有记录
-                        cur.execute(f"""
-                            UPDATE {_quote_identifier(PaymentService.RECORD_TABLE)}
-                            SET payment_amount = %s,
-                                payment_date = %s,
-                                remark = COALESCE(%s, remark),
-                                recorded_by = COALESCE(%s, recorded_by),
-                                updated_at = %s
-                            WHERE id = %s
-                        """, (
+                        arrival_update_fields = [
+                            "payment_amount = %s",
+                            "payment_date = %s",
+                            "remark = COALESCE(%s, remark)",
+                            "recorded_by = COALESCE(%s, recorded_by)"
+                        ]
+                        arrival_update_params = [
                             float(new_arrival),
                             record_date,
                             remark or ("到货款回款" if is_jinli else "回款录入"),
                             updated_by,
-                            datetime.now(),
-                            arrival_record['id']
-                        ))
+                        ]
+                        if has_record_updated_at:
+                            arrival_update_fields.append("updated_at = %s")
+                            arrival_update_params.append(datetime.now())
+                        arrival_update_params.append(arrival_record['id'])
+                        cur.execute(f"""
+                            UPDATE {_quote_identifier(PaymentService.RECORD_TABLE)}
+                            SET {', '.join(arrival_update_fields)}
+                            WHERE id = %s
+                        """, tuple(arrival_update_params))
                     elif new_arrival > 0:
                         # 创建新记录
                         cur.execute(f"""
@@ -1407,22 +1436,27 @@ class PaymentService:
                     record_date = final_date or datetime.now().strftime('%Y-%m-%d')
                     
                     if final_record:
-                        cur.execute(f"""
-                            UPDATE {_quote_identifier(PaymentService.RECORD_TABLE)}
-                            SET payment_amount = %s,
-                                payment_date = %s,
-                                remark = COALESCE(%s, remark),
-                                recorded_by = COALESCE(%s, recorded_by),
-                                updated_at = %s
-                            WHERE id = %s
-                        """, (
+                        final_update_fields = [
+                            "payment_amount = %s",
+                            "payment_date = %s",
+                            "remark = COALESCE(%s, remark)",
+                            "recorded_by = COALESCE(%s, recorded_by)"
+                        ]
+                        final_update_params = [
                             float(new_final),
                             record_date,
                             remark or "尾款回款",
                             updated_by,
-                            datetime.now(),
-                            final_record['id']
-                        ))
+                        ]
+                        if has_record_updated_at:
+                            final_update_fields.append("updated_at = %s")
+                            final_update_params.append(datetime.now())
+                        final_update_params.append(final_record['id'])
+                        cur.execute(f"""
+                            UPDATE {_quote_identifier(PaymentService.RECORD_TABLE)}
+                            SET {', '.join(final_update_fields)}
+                            WHERE id = %s
+                        """, tuple(final_update_params))
                     elif new_final > 0:
                         # 创建新记录
                         cur.execute(f"""
