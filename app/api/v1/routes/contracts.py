@@ -321,6 +321,8 @@ async def list_contracts(
     exact_contract_no: Optional[str] = Query(None, description="精确合同编号"),
     exact_smelter_company: Optional[str] = Query(None, description="精确冶炼厂"),
     exact_status: Optional[str] = Query(None, description="精确状态"),
+    date_from: Optional[str] = Query(None, description="签订开始日期"),
+    date_to: Optional[str] = Query(None, description="签订结束日期"),
     fuzzy_keywords: Optional[str] = Query(None, description="模糊关键词（空格分隔）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -333,6 +335,8 @@ async def list_contracts(
         exact_contract_no,
         exact_smelter_company,
         exact_status,
+        date_from,
+        date_to,
         fuzzy_keywords,
     )
 

@@ -726,6 +726,7 @@ class WeighbillService:
             exact_weigh_date: str = None,
             exact_ocr_status: str = None,
             exact_delivery_id: int = None,
+            exact_weighbill_id: int = None,
             page: int = 1,
             page_size: int = 20
     ) -> Dict[str, Any]:
@@ -755,7 +756,7 @@ class WeighbillService:
                     if exact_vehicle_no:
                         delivery_where.append("d.vehicle_no = %s")
                         delivery_params.append(exact_vehicle_no)
-                    if exact_delivery_id:
+                    if exact_delivery_id is not None:
                         delivery_where.append("d.id = %s")
                         delivery_params.append(exact_delivery_id)
 
@@ -807,6 +808,9 @@ class WeighbillService:
                     if exact_ocr_status:
                         weighbill_where.append("w.ocr_status = %s")
                         weighbill_params.append(exact_ocr_status)
+                    if exact_weighbill_id is not None:
+                        weighbill_where.append("w.id = %s")
+                        weighbill_params.append(exact_weighbill_id)
 
                     weighbill_sql = " AND ".join(weighbill_where)
 

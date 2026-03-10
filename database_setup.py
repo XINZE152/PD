@@ -59,6 +59,22 @@ def create_database_if_not_exists():
 		connection.close()
 
 
+def build_product_categories_table_statement() -> str:
+	"""构建固定 50 个品类槽位的品类表。"""
+	category_columns = "\n".join(
+		f"\t\tcategory_{index} VARCHAR(64) DEFAULT NULL COMMENT '品类槽位{index}',"
+		for index in range(1, 51)
+	)
+	return f"""
+	CREATE TABLE IF NOT EXISTS pd_product_categories (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+	{category_columns}
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='固定50槽位品类表';
+	"""
+
+
 TABLE_STATEMENTS = [
 	# ========== 原有表 ==========
 	"""
@@ -271,6 +287,7 @@ TABLE_STATEMENTS = [
 		INDEX idx_contract_id (contract_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='合同品种表';
 	""",
+	build_product_categories_table_statement(),
 	# 磅单结余管理
 	"""
 	CREATE TABLE IF NOT EXISTS pd_payment_receipts (

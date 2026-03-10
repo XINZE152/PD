@@ -454,6 +454,8 @@ async def modify_weighbill(
 
 @router.get("/", response_model=dict)
 async def list_weighbills(
+    exact_delivery_id: Optional[int] = Query(None, description="精确报单ID"),
+    exact_weighbill_id: Optional[int] = Query(None, description="精确磅单ID"),
     exact_shipper: Optional[str] = Query(None, description="精确发货人/报单人"),
     exact_contract_no: Optional[str] = Query(None, description="精确合同编号"),
     exact_report_date: Optional[str] = Query(None, description="精确报单日期"),
@@ -475,6 +477,8 @@ async def list_weighbills(
     """
     try:
         return service.list_weighbills_grouped(
+            exact_delivery_id=exact_delivery_id,
+            exact_weighbill_id=exact_weighbill_id,
             exact_shipper=exact_shipper,
             exact_contract_no=exact_contract_no,
             exact_report_date=exact_report_date,

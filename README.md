@@ -1,4 +1,7 @@
 # PD FastAPI Starter
+
+[![wakatime](https://wakatime.com/badge/user/d46234d8-e044-4d0d-b6d9-2789ecdaca27/project/c10939fa-88e9-4557-b299-db1defe6618b.svg)](https://wakatime.com/badge/user/d46234d8-e044-4d0d-b6d9-2789ecdaca27/project/c10939fa-88e9-4557-b299-db1defe6618b)
+
 ## 快速开始
 
 ### 1) 安装 uv 并创建虚拟环境
@@ -66,7 +69,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 以下示例基于 .env 中 PORT=8007：
 
-- 内网文档地址: http://172.30.147.217:8007/docs
+- 内网文档地址: http://127.0.0.1:8007/docs
 
 ## API 详细说明
 

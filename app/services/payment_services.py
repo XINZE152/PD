@@ -1267,15 +1267,16 @@ class PaymentService:
 
                 if is_jinli:
 
+                    arrival_date = arrival_payment_date or payment_date
+
                     # 首笔日期必须填写
-                    if new_arrival > 0 and not arrival_payment_date:
+                    if new_arrival > 0 and not arrival_date:
                         raise ValueError("金利首笔回款必须填写回款日期")
 
                     # 尾款日期必须填写
                     if new_final > 0 and not final_payment_date:
                         raise ValueError("金利尾款回款必须填写回款日期")
 
-                    arrival_date = arrival_payment_date
                     final_date = final_payment_date
                     # 金利：尾款日期
                     if final_payment_date:

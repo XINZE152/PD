@@ -668,6 +668,8 @@ class ContractService:
         exact_contract_no: Optional[str] = None,
         exact_smelter_company: Optional[str] = None,
         exact_status: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         fuzzy_keywords: Optional[str] = None,
     ) -> Dict[str, Any]:
         """获取合同列表（分页）"""
@@ -686,6 +688,12 @@ class ContractService:
                     if exact_status:
                         where_clauses.append("c.status = %s")
                         params.append(exact_status)
+                    if date_from:
+                        where_clauses.append("c.contract_date >= %s")
+                        params.append(date_from)
+                    if date_to:
+                        where_clauses.append("c.contract_date <= %s")
+                        params.append(date_to)
 
                     if fuzzy_keywords:
                         tokens = [t for t in fuzzy_keywords.split() if t]
@@ -720,6 +728,16 @@ class ContractService:
                     columns = [desc[0] for desc in cur.description]
                     rows = cur.fetchall()
                     data = [dict(zip(columns, row)) for row in rows]
+
+                    for item in data:
+                        for key in ['contract_date', 'end_date', 'created_at', 'updated_at']:
+                            if item.get(key) and isinstance(item[key], datetime):
+                                item[key] = item[key].strftime('%Y-%m-%d %H:%M:%S')
+                            elif item.get(key) and isinstance(item[key], date):
+                                item[key] = item[key].strftime('%Y-%m-%d')
+
+                        if item.get('seq_no') is None:
+                            item['seq_no'] = item['id']
 
                     return {
                         "success": True,
@@ -777,7 +795,7 @@ _contract_service = None
 
 
 def expire_contracts_after_grace(grace_days: int = 5) -> int:
-    """合同生效后超过指定天数自动失效"""
+    """按截止日期零点失效合同；无截止日期时兼容旧规则。"""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -786,8 +804,14 @@ def expire_contracts_after_grace(grace_days: int = 5) -> int:
                     UPDATE pd_contracts
                     SET status = '已失效'
                     WHERE status = '生效中'
-                      AND contract_date IS NOT NULL
-                      AND DATE_ADD(contract_date, INTERVAL %s DAY) <= CURDATE()
+                      AND (
+                        (end_date IS NOT NULL AND end_date <= CURDATE())
+                        OR (
+                          end_date IS NULL
+                          AND contract_date IS NOT NULL
+                          AND DATE_ADD(contract_date, INTERVAL %s DAY) <= CURDATE()
+                        )
+                      )
                     """,
                     (grace_days,),
                 )
