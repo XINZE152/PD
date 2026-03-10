@@ -721,6 +721,16 @@ class ContractService:
                     rows = cur.fetchall()
                     data = [dict(zip(columns, row)) for row in rows]
 
+                    for item in data:
+                        for key in ['contract_date', 'end_date', 'created_at', 'updated_at']:
+                            if item.get(key) and isinstance(item[key], datetime):
+                                item[key] = item[key].strftime('%Y-%m-%d %H:%M:%S')
+                            elif item.get(key) and isinstance(item[key], date):
+                                item[key] = item[key].strftime('%Y-%m-%d')
+
+                        if item.get('seq_no') is None:
+                            item['seq_no'] = item['id']
+
                     return {
                         "success": True,
                         "data": data,
