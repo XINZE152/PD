@@ -742,3 +742,80 @@ def reset_user_permissions(
         "success": True,
         "message": f"权限已重置为【{role}】角色默认模板"
     }
+# ========== 权限定义管理接口 ==========
+
+class AddPermissionDefReq(BaseModel):
+    field_name: str = Field(..., description="权限字段名，如 perm_new_feature", pattern="^perm_[a-z][a-z0-9_]*$")
+    label: str = Field(..., description="权限显示名称", min_length=1, max_length=64)
+
+
+@router.post("/permission/definitions", summary="新增权限字段定义")
+def add_permission_definition(
+    body: AddPermissionDefReq,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    动态添加一个新的权限字段
+    - 需要权限管理权限或管理员
+    - 会执行 ALTER TABLE 修改数据库结构
+    - 自动更新所有角色模板
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限管理权限定义")
+
+    try:
+        PermissionService.add_permission_definition(body.field_name, body.label)
+        return {"success": True, "message": f"权限字段 {body.field_name} 添加成功"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("添加权限字段失败")
+        raise HTTPException(status_code=500, detail=f"添加失败: {str(e)}")
+
+
+@router.delete("/permission/definitions/{field_name}", summary="删除权限字段定义")
+def delete_permission_definition(
+    field_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    删除一个权限字段
+    - 需要权限管理权限或管理员
+    - 会执行 ALTER TABLE 删除列，并从所有角色模板中移除
+    """
+    # 权限检查
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限管理权限定义")
+
+    try:
+        PermissionService.remove_permission_definition(field_name)
+        return {"success": True, "message": f"权限字段 {field_name} 删除成功"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("删除权限字段失败")
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
+
+@router.get("/permission/definitions", summary="获取所有权限字段定义")
+def list_permission_definitions(current_user: dict = Depends(get_current_user)):
+    """
+    获取当前系统中所有可用的权限字段定义（需要权限管理权限或管理员）
+    """
+    # 权限检查（可选，也可开放给所有登录用户）
+    if current_user.get("role") != "管理员":
+        if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
+            raise HTTPException(status_code=403, detail="无权限查看权限定义")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT field_name, label, created_at FROM pd_permission_definitions ORDER BY field_name")
+            rows = cur.fetchall()
+            return {
+                "success": True,
+                "data": rows,
+                "total": len(rows)
+            }

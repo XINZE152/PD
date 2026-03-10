@@ -421,8 +421,50 @@ TABLE_STATEMENTS = [
 
 		FOREIGN KEY (payment_detail_id) REFERENCES pd_payment_details(id) ON DELETE CASCADE
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回款记录明细表';
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS pd_permission_definitions (
+		field_name VARCHAR(64) PRIMARY KEY COMMENT '权限字段名（如 perm_schedule）',
+		label VARCHAR(64) NOT NULL COMMENT '权限显示名称',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限字段定义表';
 """
 ]
+
+def init_permission_definitions():
+	"""初始化默认权限字段定义（与原有的 PERMISSION_FIELDS/PERMISSION_LABELS 保持一致）"""
+	config = get_mysql_config()
+	connection = pymysql.connect(**config)
+	try:
+		with connection.cursor() as cursor:
+			default_perms = [
+				('perm_permission_manage', '权限管理'),
+				('perm_jinli_payment', '金利回款管理'),
+				('perm_yuguang_payment', '豫光回款管理'),
+				('perm_schedule', '排期管理'),
+				('perm_payout', '打款管理'),
+				('perm_payout_stats', '打款统计'),
+				('perm_report_stats', '统计与报表'),
+				('perm_contract_progress', '合同发运进度'),
+				('perm_contract_manage', '销售合同管理'),
+				('perm_customer_manage', '客户管理'),
+				('perm_delivery_manage', '报货管理'),
+				('perm_weighbill_manage', '磅单管理'),
+				('perm_warehouse_manage', '库房和收款人信息管理'),
+				('perm_account_manage', '账号管理'),
+				('perm_role_manage', '角色管理'),
+				('perm_ai_detect', 'AI检测'),
+				('perm_ai_predict', 'AI预测'),
+			]
+			for field, label in default_perms:
+				cursor.execute(
+					"INSERT IGNORE INTO pd_permission_definitions (field_name, label) VALUES (%s, %s)",
+					(field, label)
+				)
+		connection.commit()
+		print("默认权限字段定义初始化完成")
+	finally:
+		connection.close()
 
 
 def create_tables() -> None:
@@ -437,6 +479,7 @@ def create_tables() -> None:
 			for statement in TABLE_STATEMENTS:
 				cursor.execute(statement)
 		print("所有数据表创建完成")
+		init_permission_definitions()
 	finally:
 		connection.close()
 

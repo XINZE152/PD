@@ -471,132 +471,167 @@ class AuthService:
 # ========== 权限管理服务 ==========
 
 class PermissionService:
-    """用户权限管理服务"""
+    """用户权限管理服务（动态权限字段版）"""
 
-    # 所有权限字段定义（用于动态操作）
-    PERMISSION_FIELDS = [
-        'perm_permission_manage',  # 权限管理权限
-        'perm_jinli_payment',  # 金利回款管理权限
-        'perm_yuguang_payment',  # 豫光回款管理权限
-        'perm_schedule',  # 排期管理权限
-        'perm_payout',  # 打款管理权限
-        'perm_payout_stats',  # 打款统计权限
-        'perm_report_stats',  # 统计与报表权限
-        'perm_contract_progress',  # 合同发运进度权限
-        'perm_contract_manage',  # 销售合同管理权限
-        'perm_customer_manage',  # 客户管理权限
-        'perm_delivery_manage',  # 报货管理权限
-        'perm_weighbill_manage',  # 磅单管理权限
-        'perm_warehouse_manage',  # 库房和收款人信息管理权限
-        'perm_account_manage',  # 账号管理权限
-        'perm_role_manage',  # 角色管理权限
-        'perm_ai_detect',  # AI检测权限
-        'perm_ai_predict',  # AI预测权限
-    ]
-
-    # 权限显示名称映射
-    PERMISSION_LABELS = {
-        'perm_permission_manage': '权限管理',
-        'perm_jinli_payment': '金利回款管理',
-        'perm_yuguang_payment': '豫光回款管理',
-        'perm_schedule': '排期管理',
-        'perm_payout': '打款管理',
-        'perm_payout_stats': '打款统计',
-        'perm_report_stats': '统计与报表',
-        'perm_contract_progress': '合同发运进度',
-        'perm_contract_manage': '销售合同管理',
-        'perm_customer_manage': '客户管理',
-        'perm_delivery_manage': '报货管理',
-        'perm_weighbill_manage': '磅单管理',
-        'perm_warehouse_manage': '库房和收款人信息管理',
-        'perm_account_manage': '账号管理',
-        'perm_role_manage': '角色管理',
-        'perm_ai_detect': 'AI检测',
-        'perm_ai_predict': 'AI预测',
-    }
-
-    # 角色权限模板（创建时默认权限）
-    ROLE_TEMPLATES = {
-        '管理员': {f: 1 for f in PERMISSION_FIELDS},  # 全部权限
-        '大区经理': {
-            'perm_schedule': 1,
-            'perm_payout': 1,
-            'perm_payout_stats': 1,
-            'perm_report_stats': 1,
-            'perm_contract_progress': 1,
-            'perm_contract_manage': 1,
-            'perm_customer_manage': 1,
-            'perm_delivery_manage': 1,
-            'perm_weighbill_manage': 1,
-            'perm_warehouse_manage': 1,
-            'perm_account_manage': 1,
-        },
-        '自营库管理': {
-            'perm_delivery_manage': 1,
-            'perm_weighbill_manage': 1,
-            'perm_warehouse_manage': 1,
-        },
-        '财务': {
-            'perm_jinli_payment': 1,
-            'perm_yuguang_payment': 1,
-            'perm_schedule': 1,
-            'perm_payout': 1,
-            'perm_payout_stats': 1,
-            'perm_report_stats': 1,
-        },
-        '会计': {
-            'perm_jinli_payment': 1,
-            'perm_yuguang_payment': 1,
-            'perm_report_stats': 1,
-        },
-    }
+    # 缓存（类级别）
+    _fields_cache = None          # List[str]
+    _labels_cache = None          # Dict[str, str]
 
     VALID_ROLES = ['管理员', '大区经理', '自营库管理', '财务', '会计']
 
+    @classmethod
+    def _load_definitions(cls):
+        """从数据库加载权限字段定义，更新缓存"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT field_name, label FROM pd_permission_definitions ORDER BY field_name")
+                rows = cur.fetchall()
+                cls._fields_cache = [row['field_name'] for row in rows]
+                cls._labels_cache = {row['field_name']: row['label'] for row in rows}
+
+    @classmethod
+    def get_all_fields(cls):
+        """获取所有权限字段名列表（动态）"""
+        if cls._fields_cache is None:
+            cls._load_definitions()
+        return cls._fields_cache
+
+    @classmethod
+    def get_label(cls, field_name):
+        """获取指定权限字段的显示名称"""
+        if cls._labels_cache is None:
+            cls._load_definitions()
+        return cls._labels_cache.get(field_name, field_name)
+
+    @classmethod
+    def refresh_cache(cls):
+        """刷新缓存（在增删权限定义后调用）"""
+        cls._fields_cache = None
+        cls._labels_cache = None
+        cls._load_definitions()
+
     @staticmethod
     def ensure_table_exists():
-        """确保权限表存在"""
+        """确保权限表、角色模板表、权限定义表存在"""
+        # 原有代码不变，但需保证 pd_permission_definitions 已创建
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 原有 pd_user_permissions 表创建代码...
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pd_role_templates (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        role VARCHAR(32) NOT NULL UNIQUE,
+                        template_json TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+                # 初始化默认角色模板数据（使用内存默认，但会写入数据库）
+                # 内存默认模板（供初始化使用）
+                default_role_templates = {
+                    '管理员': {f: 1 for f in PermissionService.get_all_fields()},
+                    '大区经理': {
+                        'perm_schedule': 1,
+                        'perm_payout': 1,
+                        'perm_payout_stats': 1,
+                        'perm_report_stats': 1,
+                        'perm_contract_progress': 1,
+                        'perm_contract_manage': 1,
+                        'perm_customer_manage': 1,
+                        'perm_delivery_manage': 1,
+                        'perm_weighbill_manage': 1,
+                        'perm_warehouse_manage': 1,
+                        'perm_account_manage': 1,
+                    },
+                    '自营库管理': {
+                        'perm_delivery_manage': 1,
+                        'perm_weighbill_manage': 1,
+                        'perm_warehouse_manage': 1,
+                    },
+                    '财务': {
+                        'perm_jinli_payment': 1,
+                        'perm_yuguang_payment': 1,
+                        'perm_schedule': 1,
+                        'perm_payout': 1,
+                        'perm_payout_stats': 1,
+                        'perm_report_stats': 1,
+                    },
+                    '会计': {
+                        'perm_jinli_payment': 1,
+                        'perm_yuguang_payment': 1,
+                        'perm_report_stats': 1,
+                    },
+                }
+                for role, perms in default_role_templates.items():
+                    # 补齐所有字段（未在模板中定义的置0）
+                    full_perms = {f: perms.get(f, 0) for f in PermissionService.get_all_fields()}
+                    cur.execute("""
+                        INSERT INTO pd_role_templates (role, template_json) 
+                        VALUES (%s, %s) 
+                        ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
+                    """, (role, json.dumps(full_perms)))
+                conn.commit()
+
+    # ---------- 角色模板相关 ----------
+    @staticmethod
+    def get_role_template(role: str) -> Dict[str, int]:
+        """从数据库获取角色模板，并确保包含所有现有字段"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT template_json FROM pd_role_templates WHERE role=%s", (role,))
+                row = cur.fetchone()
+                if row:
+                    template = json.loads(row['template_json'])
+                else:
+                    # 如果数据库中没有，返回空模板（但通常不应该发生）
+                    template = {}
+        # 补齐所有字段
+        all_fields = PermissionService.get_all_fields()
+        full_template = {field: template.get(field, 0) for field in all_fields}
+        return full_template
+
+    @staticmethod
+    def update_role_template(role: str, permissions: Dict[str, bool]) -> bool:
+        """更新角色模板到数据库（内存不再维护）"""
+        # 构建完整权限字典（所有字段，未指定的置0）
+        all_fields = PermissionService.get_all_fields()
+        full_permissions = {
+            field: 1 if permissions.get(field, False) else 0
+            for field in all_fields
+        }
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    CREATE TABLE IF NOT EXISTS pd_user_permissions (
-                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                        user_id BIGINT NOT NULL,
-                        role VARCHAR(32) NOT NULL DEFAULT '会计',
-                        perm_permission_manage TINYINT DEFAULT 0,
-                        perm_jinli_payment TINYINT DEFAULT 0,
-                        perm_yuguang_payment TINYINT DEFAULT 0,
-                        perm_schedule TINYINT DEFAULT 0,
-                        perm_payout TINYINT DEFAULT 0,
-                        perm_payout_stats TINYINT DEFAULT 0,
-                        perm_report_stats TINYINT DEFAULT 0,
-                        perm_contract_progress TINYINT DEFAULT 0,
-                        perm_contract_manage TINYINT DEFAULT 0,
-                        perm_customer_manage TINYINT DEFAULT 0,
-                        perm_delivery_manage TINYINT DEFAULT 0,
-                        perm_weighbill_manage TINYINT DEFAULT 0,
-                        perm_warehouse_manage TINYINT DEFAULT 0,
-                        perm_account_manage TINYINT DEFAULT 0,
-                        perm_role_manage TINYINT DEFAULT 0,
-                        perm_ai_detect TINYINT DEFAULT 0,
-                        perm_ai_predict TINYINT DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                        UNIQUE KEY uk_user_id (user_id),
-                        INDEX idx_role (role)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """)
+                    INSERT INTO pd_role_templates (role, template_json) 
+                    VALUES (%s, %s) 
+                    ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
+                """, (role, json.dumps(full_permissions)))
+                conn.commit()
+        return True
 
     @staticmethod
+    def get_all_role_templates() -> Dict[str, Dict]:
+        """获取所有角色模板（从数据库读取）"""
+        templates = {}
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT role, template_json FROM pd_role_templates")
+                rows = cur.fetchall()
+                for row in rows:
+                    role = row['role']
+                    templates[role] = json.loads(row['template_json'])
+        return templates
+
+    # ---------- 用户权限操作 ----------
+    @staticmethod
     def create_default_permissions(user_id: int, role: str) -> bool:
-        """
-        为新用户创建默认权限
-        """
+        """为新用户创建默认权限（基于角色模板）"""
         if role not in PermissionService.VALID_ROLES:
             role = '会计'
 
-        # 获取角色模板
-        template = PermissionService.ROLE_TEMPLATES.get(role, {})
+        # 获取角色模板（已包含所有字段）
+        template = PermissionService.get_role_template(role)
+        all_fields = PermissionService.get_all_fields()
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -606,11 +641,10 @@ class PermissionService:
                     return False
 
                 # 构建插入数据
-                fields = ['user_id', 'role'] + PermissionService.PERMISSION_FIELDS
+                fields = ['user_id', 'role'] + all_fields
                 values = [user_id, role]
-
-                for perm_field in PermissionService.PERMISSION_FIELDS:
-                    values.append(1 if perm_field in template else 0)
+                for field in all_fields:
+                    values.append(template.get(field, 0))
 
                 placeholders = ','.join(['%s'] * len(values))
                 fields_sql = ','.join(fields)
@@ -624,9 +658,7 @@ class PermissionService:
 
     @staticmethod
     def get_user_permissions(user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        获取用户权限详情
-        """
+        """获取用户权限详情（动态字段）"""
         with get_conn() as conn:
             with conn.cursor() as cur:
                 # 获取用户基本信息
@@ -636,26 +668,21 @@ class PermissionService:
                     WHERE id=%s AND status!=%s
                 """, (user_id, int(UserStatus.DELETED)))
                 user = cur.fetchone()
-
                 if not user:
                     return None
 
                 # 获取权限配置
-                cur.execute("""
-                    SELECT * FROM pd_user_permissions 
-                    WHERE user_id=%s
-                """, (user_id,))
+                cur.execute("SELECT * FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                 perm_row = cur.fetchone()
-
-                # 如果没有权限记录，创建默认
                 if not perm_row:
                     PermissionService.create_default_permissions(user_id, user['base_role'])
                     cur.execute("SELECT * FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                     perm_row = cur.fetchone()
 
-                # 构建权限字典
+                # 构建权限字典（只保留权限字段）
+                all_fields = PermissionService.get_all_fields()
                 permissions = {}
-                for field in PermissionService.PERMISSION_FIELDS:
+                for field in all_fields:
                     permissions[field] = bool(perm_row.get(field, 0)) if perm_row else False
 
                 # 添加显示名称
@@ -663,16 +690,16 @@ class PermissionService:
                 for field, value in permissions.items():
                     permissions_with_labels[field] = {
                         'value': value,
-                        'label': PermissionService.PERMISSION_LABELS.get(field, field)
+                        'label': PermissionService.get_label(field)
                     }
 
                 return {
                     'user_id': user_id,
                     'name': user['name'],
                     'account': user['account'],
-                    'base_role': user['base_role'],  # pd_users表中的角色
-                    'current_role': perm_row['role'] if perm_row else user['base_role'],  # 权限表中的角色
-                    'role': perm_row['role'] if perm_row else user['base_role'],  # 当前生效角色
+                    'base_role': user['base_role'],
+                    'current_role': perm_row['role'] if perm_row else user['base_role'],
+                    'role': perm_row['role'] if perm_row else user['base_role'],
                     'permissions': permissions,
                     'permissions_with_labels': permissions_with_labels,
                     'updated_at': str(perm_row['updated_at']) if perm_row else None
@@ -680,15 +707,7 @@ class PermissionService:
 
     @staticmethod
     def update_permissions(user_id: int, role: str = None, permissions: Dict[str, bool] = None) -> bool:
-        """
-        更新用户权限和角色
-
-        Args:
-            user_id: 用户ID
-            role: 新角色（可选）
-            permissions: 权限字典（可选，如 {'perm_schedule': True, 'perm_payout': False}）
-        """
-        # 验证角色
+        """更新用户权限和角色"""
         if role and role not in PermissionService.VALID_ROLES:
             raise ValueError(f"无效的角色，可选: {PermissionService.VALID_ROLES}")
 
@@ -697,14 +716,12 @@ class PermissionService:
                 # 检查权限记录是否存在
                 cur.execute("SELECT id FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                 perm_row = cur.fetchone()
-
                 if not perm_row:
                     # 获取用户角色创建默认
                     cur.execute("SELECT role FROM pd_users WHERE id=%s", (user_id,))
                     user = cur.fetchone()
                     if not user:
                         raise ValueError("用户不存在")
-
                     PermissionService.create_default_permissions(user_id, role or user['role'])
                     cur.execute("SELECT id FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                     perm_row = cur.fetchone()
@@ -712,29 +729,23 @@ class PermissionService:
                 # 构建更新
                 updates = []
                 params = []
-
-                # 更新角色
                 if role:
                     updates.append("role=%s")
                     params.append(role)
-
-                    # 如果更换角色，可以选择是否重置为角色模板
-                    # 这里不自动重置，保持原有权限逻辑
-
-                # 更新权限
                 if permissions:
+                    # 只更新传入的权限字段
                     for perm_field, value in permissions.items():
-                        if perm_field in PermissionService.PERMISSION_FIELDS:
-                            updates.append(f"{perm_field}=%s")
-                            params.append(1 if value else 0)
-
+                        # 验证字段是否存在
+                        if perm_field not in PermissionService.get_all_fields():
+                            raise ValueError(f"无效的权限字段: {perm_field}")
+                        updates.append(f"{perm_field}=%s")
+                        params.append(1 if value else 0)
                 if not updates:
-                    return True  # 无更新
+                    return True
 
                 params.append(user_id)
                 set_clause = ", ".join(updates)
                 sql = f"UPDATE pd_user_permissions SET {set_clause} WHERE user_id=%s"
-
                 cur.execute(sql, tuple(params))
                 conn.commit()
 
@@ -743,47 +754,33 @@ class PermissionService:
 
     @staticmethod
     def check_permission(user_id: int, permission_field: str) -> bool:
-        """
-        检查用户是否有指定权限
-        """
-        if permission_field not in PermissionService.PERMISSION_FIELDS:
+        """检查用户是否有指定权限"""
+        if permission_field not in PermissionService.get_all_fields():
             return False
-
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT {permission_field} FROM pd_user_permissions 
-                    WHERE user_id=%s
-                """, (user_id,))
+                cur.execute(f"SELECT {permission_field} FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                 row = cur.fetchone()
-
                 if not row:
                     return False
-
                 return bool(row.get(permission_field, 0))
 
     @staticmethod
     def list_all_permissions(page: int = 1, size: int = 20, role: str = None, keyword: str = None) -> Dict[str, Any]:
-        """
-        获取所有用户权限列表
-        """
+        """获取所有用户权限列表（动态字段）"""
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # 构建查询条件
                 where_conditions = ["u.status != %s"]
                 params = [int(UserStatus.DELETED)]
-
                 if role:
                     where_conditions.append("(p.role=%s OR (p.role IS NULL AND u.role=%s))")
                     params.extend([role, role])
-
                 if keyword:
                     where_conditions.append("(u.name LIKE %s OR u.account LIKE %s)")
                     params.extend([f"%{keyword}%", f"%{keyword}%"])
-
                 where_clause = " AND ".join(where_conditions)
 
-                # 查询总数
+                # 总数
                 count_sql = f"""
                     SELECT COUNT(*) as total 
                     FROM pd_users u
@@ -793,7 +790,10 @@ class PermissionService:
                 cur.execute(count_sql, tuple(params))
                 total = cur.fetchone()['total']
 
-                # 查询列表
+                # 动态构建查询字段
+                all_fields = PermissionService.get_all_fields()
+                select_fields = ','.join([f'p.{f}' for f in all_fields])
+
                 offset = (page - 1) * size
                 select_sql = f"""
                     SELECT 
@@ -801,7 +801,7 @@ class PermissionService:
                         u.name,
                         u.account,
                         COALESCE(p.role, u.role) as role,
-                        {','.join([f'p.{f}' for f in PermissionService.PERMISSION_FIELDS])}
+                        {select_fields}
                     FROM pd_users u
                     LEFT JOIN pd_user_permissions p ON u.id=p.user_id
                     WHERE {where_clause}
@@ -809,11 +809,9 @@ class PermissionService:
                     LIMIT %s OFFSET %s
                 """
                 params.extend([size, offset])
-
                 cur.execute(select_sql, tuple(params))
                 rows = cur.fetchall()
 
-                # 处理结果
                 result_list = []
                 for row in rows:
                     user_data = {
@@ -822,21 +820,18 @@ class PermissionService:
                         'account': row['account'],
                         'role': row['role'],
                     }
-
-                    # 添加权限
-                    for field in PermissionService.PERMISSION_FIELDS:
+                    # 添加权限字段
+                    for field in all_fields:
                         user_data[field] = bool(row.get(field, 0))
-
-                    # 添加权限标签
+                    # 添加权限标签列表
                     user_data['permissions_list'] = [
                         {
                             'field': field,
-                            'label': PermissionService.PERMISSION_LABELS.get(field, field),
+                            'label': PermissionService.get_label(field),
                             'value': bool(row.get(field, 0))
                         }
-                        for field in PermissionService.PERMISSION_FIELDS
+                        for field in all_fields
                     ]
-
                     result_list.append(user_data)
 
                 return {
@@ -848,88 +843,6 @@ class PermissionService:
                 }
 
     @staticmethod
-    def ensure_table_exists():
-        """确保权限表和角色模板表存在"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                # 原有 pd_user_permissions 表创建代码...
-
-                # 新增：创建角色模板表
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS pd_role_templates (
-                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                        role VARCHAR(32) NOT NULL UNIQUE,
-                        template_json TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """)
-
-                # 初始化默认模板数据
-                for role, perms in PermissionService.ROLE_TEMPLATES.items():
-                    cur.execute("""
-                        INSERT INTO pd_role_templates (role, template_json) 
-                        VALUES (%s, %s) 
-                        ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
-                    """, (role, json.dumps(perms)))
-                conn.commit()
-
-    @staticmethod
-    def get_role_template(role: str) -> Dict[str, int]:
-        """从数据库获取角色模板"""
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT template_json FROM pd_role_templates WHERE role=%s", (role,))
-                row = cur.fetchone()
-                if row:
-                    return json.loads(row['template_json'])
-                return PermissionService.ROLE_TEMPLATES.get(role, {})  # 回退到内存默认值
-
-    @staticmethod
-    def update_role_template(role: str, permissions: Dict[str, bool]) -> bool:
-        """更新角色模板到数据库"""
-        # 构建完整权限字典
-        full_permissions = {
-            field: (1 if permissions.get(field, False) else 0)
-            for field in PermissionService.PERMISSION_FIELDS
-        }
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO pd_role_templates (role, template_json) 
-                    VALUES (%s, %s) 
-                    ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
-                """, (role, json.dumps(full_permissions)))
-                conn.commit()
-
-                # 同时更新内存中的模板
-                PermissionService.ROLE_TEMPLATES[role] = full_permissions
-                return True
-
-    @staticmethod
-    def get_all_role_templates() -> Dict[str, Dict]:
-        """获取所有角色模板（优先从数据库读取）"""
-        templates = {}
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT role, template_json FROM pd_role_templates")
-                rows = cur.fetchall()
-
-                db_roles = set()
-                for row in rows:
-                    role = row['role']
-                    templates[role] = json.loads(row['template_json'])
-                    db_roles.add(role)
-
-        # 如果数据库中没有某些角色，使用内存默认值
-        for role in PermissionService.VALID_ROLES:
-            if role not in db_roles:
-                templates[role] = PermissionService.ROLE_TEMPLATES.get(role, {})
-
-        return templates
-    @staticmethod
     def delete_permissions(user_id: int) -> bool:
         """删除用户权限（用户删除时调用）"""
         with get_conn() as conn:
@@ -937,3 +850,105 @@ class PermissionService:
                 cur.execute("DELETE FROM pd_user_permissions WHERE user_id=%s", (user_id,))
                 conn.commit()
                 return True
+
+    # ---------- 动态权限字段管理 ----------
+    @staticmethod
+    def add_permission_definition(field_name: str, label: str) -> bool:
+        """
+        动态添加一个新的权限字段
+        - 校验字段名格式（必须以 perm_ 开头，只含小写字母、数字、下划线）
+        - 检查是否已存在
+        - 执行 ALTER TABLE pd_user_permissions ADD COLUMN
+        - 插入 pd_permission_definitions
+        - 更新 pd_role_templates 中的每个角色模板 JSON，添加该字段（默认0）
+        - 刷新缓存
+        """
+        # 1. 校验格式
+        if not re.match(r'^perm_[a-z][a-z0-9_]*$', field_name):
+            raise ValueError("字段名必须以 'perm_' 开头，且只能包含小写字母、数字、下划线")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 2. 检查是否已存在（通过定义表）
+                cur.execute("SELECT 1 FROM pd_permission_definitions WHERE field_name=%s", (field_name,))
+                if cur.fetchone():
+                    raise ValueError(f"权限字段 {field_name} 已存在")
+
+                # 3. 执行 ALTER TABLE 添加列
+                alter_sql = f"ALTER TABLE pd_user_permissions ADD COLUMN `{field_name}` TINYINT DEFAULT 0 COMMENT %s"
+                cur.execute(alter_sql, (label,))
+
+                # 4. 插入定义表
+                cur.execute(
+                    "INSERT INTO pd_permission_definitions (field_name, label) VALUES (%s, %s)",
+                    (field_name, label)
+                )
+
+                # 5. 更新角色模板表：为每个角色的 JSON 增加该字段，值为0
+                cur.execute("SELECT role, template_json FROM pd_role_templates")
+                templates = cur.fetchall()
+                for row in templates:
+                    role = row['role']
+                    template = json.loads(row['template_json'])
+                    if field_name not in template:
+                        template[field_name] = 0
+                        cur.execute(
+                            "UPDATE pd_role_templates SET template_json=%s WHERE role=%s",
+                            (json.dumps(template), role)
+                        )
+
+                conn.commit()
+
+        # 6. 刷新缓存
+        PermissionService.refresh_cache()
+        logger.info(f"新增权限字段成功: {field_name} ({label})")
+        return True
+
+    @staticmethod
+    def remove_permission_definition(field_name: str) -> bool:
+        """
+        动态删除一个权限字段
+        - 检查字段是否存在且不是系统保留字段
+        - 执行 ALTER TABLE pd_user_permissions DROP COLUMN
+        - 从 pd_permission_definitions 删除
+        - 从所有角色模板 JSON 中移除该字段
+        - 刷新缓存
+        """
+        # 可选保护：禁止删除某些核心权限
+        protected = ['perm_permission_manage']  # 根据需要调整
+        if field_name in protected:
+            raise ValueError(f"字段 {field_name} 为系统保留，不可删除")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 检查是否存在
+                cur.execute("SELECT 1 FROM pd_permission_definitions WHERE field_name=%s", (field_name,))
+                if not cur.fetchone():
+                    raise ValueError(f"权限字段 {field_name} 不存在")
+
+                # 执行 ALTER TABLE 删除列
+                alter_sql = f"ALTER TABLE pd_user_permissions DROP COLUMN `{field_name}`"
+                cur.execute(alter_sql)
+
+                # 从定义表删除
+                cur.execute("DELETE FROM pd_permission_definitions WHERE field_name=%s", (field_name,))
+
+                # 从角色模板 JSON 中移除该字段
+                cur.execute("SELECT role, template_json FROM pd_role_templates")
+                templates = cur.fetchall()
+                for row in templates:
+                    role = row['role']
+                    template = json.loads(row['template_json'])
+                    if field_name in template:
+                        del template[field_name]
+                        cur.execute(
+                            "UPDATE pd_role_templates SET template_json=%s WHERE role=%s",
+                            (json.dumps(template), role)
+                        )
+
+                conn.commit()
+
+        # 刷新缓存
+        PermissionService.refresh_cache()
+        logger.info(f"删除权限字段成功: {field_name}")
+        return True
