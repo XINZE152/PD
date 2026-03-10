@@ -2,7 +2,7 @@ import bcrypt
 import re
 from typing import Optional, Dict, Any
 from enum import IntEnum
-
+import json
 from core.database import get_conn
 from core.table_access import build_dynamic_select, _quote_identifier
 from core.logging import get_logger
@@ -847,6 +847,88 @@ class PermissionService:
                     "list": result_list
                 }
 
+    @staticmethod
+    def ensure_table_exists():
+        """确保权限表和角色模板表存在"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 原有 pd_user_permissions 表创建代码...
+
+                # 新增：创建角色模板表
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pd_role_templates (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        role VARCHAR(32) NOT NULL UNIQUE,
+                        template_json TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+
+                # 初始化默认模板数据
+                for role, perms in PermissionService.ROLE_TEMPLATES.items():
+                    cur.execute("""
+                        INSERT INTO pd_role_templates (role, template_json) 
+                        VALUES (%s, %s) 
+                        ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
+                    """, (role, json.dumps(perms)))
+                conn.commit()
+
+    @staticmethod
+    def get_role_template(role: str) -> Dict[str, int]:
+        """从数据库获取角色模板"""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT template_json FROM pd_role_templates WHERE role=%s", (role,))
+                row = cur.fetchone()
+                if row:
+                    return json.loads(row['template_json'])
+                return PermissionService.ROLE_TEMPLATES.get(role, {})  # 回退到内存默认值
+
+    @staticmethod
+    def update_role_template(role: str, permissions: Dict[str, bool]) -> bool:
+        """更新角色模板到数据库"""
+        # 构建完整权限字典
+        full_permissions = {
+            field: (1 if permissions.get(field, False) else 0)
+            for field in PermissionService.PERMISSION_FIELDS
+        }
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pd_role_templates (role, template_json) 
+                    VALUES (%s, %s) 
+                    ON DUPLICATE KEY UPDATE template_json = VALUES(template_json)
+                """, (role, json.dumps(full_permissions)))
+                conn.commit()
+
+                # 同时更新内存中的模板
+                PermissionService.ROLE_TEMPLATES[role] = full_permissions
+                return True
+
+    @staticmethod
+    def get_all_role_templates() -> Dict[str, Dict]:
+        """获取所有角色模板（优先从数据库读取）"""
+        templates = {}
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT role, template_json FROM pd_role_templates")
+                rows = cur.fetchall()
+
+                db_roles = set()
+                for row in rows:
+                    role = row['role']
+                    templates[role] = json.loads(row['template_json'])
+                    db_roles.add(role)
+
+        # 如果数据库中没有某些角色，使用内存默认值
+        for role in PermissionService.VALID_ROLES:
+            if role not in db_roles:
+                templates[role] = PermissionService.ROLE_TEMPLATES.get(role, {})
+
+        return templates
     @staticmethod
     def delete_permissions(user_id: int) -> bool:
         """删除用户权限（用户删除时调用）"""

@@ -623,30 +623,25 @@ def update_user_permission(
 @router.get("/permissions/roles/templates", summary="获取角色权限模板")
 def get_role_templates(current_user: dict = Depends(get_current_user)):
     """
-    获取各角色的默认权限模板
+    获取各角色的默认权限模板（从数据库读取）
     """
     # 权限检查
     if current_user.get("role") != "管理员":
         if not PermissionService.check_permission(current_user["id"], "perm_permission_manage"):
             raise HTTPException(status_code=403, detail="无权限查看")
 
+    # 从数据库获取模板
+    templates_data = PermissionService.get_all_role_templates()
+
     templates = {}
-    for role, perms in PermissionService.ROLE_TEMPLATES.items():
+    for role, perms in templates_data.items():
         templates[role] = {
             'role': role,
             'permissions': [
                 {
                     'field': field,
                     'label': PermissionService.PERMISSION_LABELS.get(field, field),
-                    'value': True
-                }
-                for field in perms.keys()
-            ],
-            'all_permissions': [
-                {
-                    'field': field,
-                    'label': PermissionService.PERMISSION_LABELS.get(field, field),
-                    'value': field in perms
+                    'value': bool(perms.get(field, 0))
                 }
                 for field in PermissionService.PERMISSION_FIELDS
             ]
@@ -664,6 +659,47 @@ def get_role_templates(current_user: dict = Depends(get_current_user)):
             for field in PermissionService.PERMISSION_FIELDS
         ]
     }
+
+
+@router.put("/permissions/roles/{role}/template", summary="修改角色权限模板")
+def update_role_template(
+        role: str,
+        permissions: Dict[str, bool],
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    修改角色权限模板（持久化到数据库）
+    """
+    # 仅管理员可操作
+    if current_user.get("role") != "管理员":
+        raise HTTPException(status_code=403, detail="仅管理员可修改角色模板")
+
+    # 验证角色合法性
+    if role not in PermissionService.VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"无效的角色，可选: {PermissionService.VALID_ROLES}")
+
+    # 管理员角色必须拥有所有权限
+    if role == "管理员":
+        raise HTTPException(status_code=400, detail="管理员角色必须拥有所有权限，不可修改")
+
+    # 验证权限字段
+    invalid_perms = [p for p in permissions.keys() if p not in PermissionService.PERMISSION_FIELDS]
+    if invalid_perms:
+        raise HTTPException(status_code=400, detail=f"无效的权限字段: {invalid_perms}")
+
+    try:
+        # 持久化到数据库
+        PermissionService.update_role_template(role, permissions)
+
+        return {
+            "success": True,
+            "message": f"【{role}】角色权限模板更新成功",
+            "role": role
+        }
+
+    except Exception as e:
+        logger.exception("更新角色模板失败")
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
 
 
 @router.post("/permissions/{user_id}/reset", summary="重置用户权限为角色模板")
