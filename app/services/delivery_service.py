@@ -5,6 +5,7 @@
 import logging
 import os
 import re
+import uuid
 from decimal import Decimal, ROUND_FLOOR
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -753,7 +754,7 @@ class DeliveryService:
 
                     if image_file:
                         safe_name = re.sub(r'[^\w\-]', '_', str(delivery_id))
-                        filename = f"delivery_{safe_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+                        filename = f"delivery_{safe_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.jpg"
                         file_path = UPLOAD_DIR / filename
 
                         with open(file_path, "wb") as f:
@@ -828,6 +829,149 @@ class DeliveryService:
                     pass
             logger.error(f"更新报货订单失败: {e}")
             return {"success": False, "error": str(e)}
+
+    def batch_update_delivery_images(self, items: List[Dict], uploaded_by: str) -> List[Dict]:
+        """
+        批量更新报单联单图片（复用数据库连接，提高性能）
+
+        Args:
+            items: 上传项列表，每项包含：
+                - delivery_id: 报单ID
+                - image_bytes: 图片字节数据
+                - has_delivery_order: 联单状态（有/无）
+            uploaded_by: 上传者身份（司机/公司）
+
+        Returns:
+            结果列表，每项包含 success、delivery_id、image_path 等
+        """
+        results = []
+
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    for idx, item in enumerate(items):
+                        delivery_id = item.get('delivery_id')
+                        image_bytes = item.get('image_bytes')
+                        has_order = item.get('has_delivery_order', '有')
+
+                        try:
+                            # 查询原报单
+                            cur.execute(
+                                """SELECT has_delivery_order, delivery_order_image, upload_status, vehicle_no 
+                                   FROM pd_deliveries WHERE id = %s""",
+                                (delivery_id,)
+                            )
+                            old = cur.fetchone()
+
+                            if not old:
+                                results.append({
+                                    "index": idx,
+                                    "delivery_id": delivery_id,
+                                    "success": False,
+                                    "error": f"报单ID {delivery_id} 不存在"
+                                })
+                                continue
+
+                            # 统一转换为字典（兼容不同 cursor 类型）
+                            if not isinstance(old, dict):
+                                old = {
+                                    'has_delivery_order': old[0],
+                                    'delivery_order_image': old[1],
+                                    'upload_status': old[2],
+                                    'vehicle_no': old[3]
+                                }
+
+                            # 检查是否已上传
+                            if old.get('upload_status') == '已上传':
+                                results.append({
+                                    "index": idx,
+                                    "delivery_id": delivery_id,
+                                    "success": False,
+                                    "error": "已上传联单，请使用修改接口",
+                                    "image_path": old.get('delivery_order_image'),
+                                    "upload_status": "已上传"
+                                })
+                                continue
+
+                            # 保存图片文件
+                            safe_name = re.sub(r'[^\w\-]', '_', str(old.get('vehicle_no', delivery_id)))
+                            filename = f"delivery_{safe_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.jpg"
+                            file_path = UPLOAD_DIR / filename
+
+                            with open(file_path, "wb") as f:
+                                f.write(image_bytes)
+
+                            # 计算联单费
+                            service_fee = self._calculate_service_fee(has_order)
+
+                            # 确定来源类型
+                            source_type = self._determine_source_type(has_order, uploaded_by)
+
+                            # 更新数据库
+                            cur.execute("""
+                                UPDATE pd_deliveries 
+                                SET has_delivery_order = %s,
+                                    delivery_order_image = %s,
+                                    upload_status = '已上传',
+                                    source_type = %s,
+                                    service_fee = %s,
+                                    uploaded_at = NOW(),
+                                    updated_at = NOW()
+                                WHERE id = %s
+                            """, (
+                                has_order,
+                                str(file_path),
+                                source_type,
+                                service_fee,
+                                delivery_id
+                            ))
+
+                            results.append({
+                                "index": idx,
+                                "delivery_id": delivery_id,
+                                "success": True,
+                                "message": "联单上传成功",
+                                "image_path": str(file_path),
+                                "upload_status": "已上传",
+                                "service_fee": float(service_fee),
+                                "source_type": source_type
+                            })
+
+                        except Exception as e:
+                            logger.error(f"批量上传第{idx}项失败: {e}")
+                            results.append({
+                                "index": idx,
+                                "delivery_id": delivery_id,
+                                "success": False,
+                                "error": str(e)
+                            })
+
+                    # 统一提交事务
+                    conn.commit()
+
+        except Exception as e:
+            logger.error(f"批量更新数据库连接失败: {e}")
+            # 标记所有未完成的为失败
+            for i, r in enumerate(results):
+                if 'success' not in r:
+                    results[i] = {
+                        "index": r.get('index', i),
+                        "delivery_id": r.get('delivery_id'),
+                        "success": False,
+                        "error": f"数据库连接失败: {str(e)}"
+                    }
+            # 为未处理的项添加失败结果
+            processed_indices = {r['index'] for r in results if 'index' in r}
+            for idx in range(len(items)):
+                if idx not in processed_indices:
+                    results.append({
+                        "index": idx,
+                        "delivery_id": items[idx].get('delivery_id'),
+                        "success": False,
+                        "error": f"数据库连接失败: {str(e)}"
+                    })
+
+        return results
 
     def get_delivery(self, delivery_id: int) -> Optional[Dict]:
         """获取订单详情（包含多车信息）"""
