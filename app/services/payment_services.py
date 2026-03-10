@@ -967,6 +967,7 @@ class PaymentService:
                         pd.collection_status as 回款状态,
                         
                         -- ========== 第六行：打款状态 ==========
+                        b.payout_date as 打款日期,
                         {is_paid_out_select} as 打款状态,
                         CASE 
                             WHEN {is_paid_out_select} = 1 THEN '已打款'
@@ -1014,7 +1015,7 @@ class PaymentService:
                     item = dict(row)
                     
                     # 转换时间字段为字符串
-                    time_fields = ['排款日期', '报单日期', '磅单日期', '回款日期', 'created_at', 'updated_at']
+                    time_fields = ['排款日期', '打款日期', '报单日期', '磅单日期', '回款日期', 'created_at', 'updated_at']
                     for field in time_fields:
                         if item.get(field):
                             item[field] = str(item[field])
