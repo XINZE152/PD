@@ -328,10 +328,10 @@ class ContractPaymentDetailResp(BaseModel):
 
 class UpdateCollectionReq(BaseModel):
     """编辑回款请求（金利分阶段日期，豫光单一日期）"""
-    arrival_paid_amount: Optional[float] = Field(None, ge=0, description="已回款首笔金额")
-    final_paid_amount: Optional[float] = Field(None, ge=0, description="已回款尾款金额（仅金利使用）")
+    arrival_paid_amount: Optional[float] = Field(None, ge=0, description="已回款首笔金额（覆盖模式，一次付清）")
+    final_paid_amount: Optional[float] = Field(None, ge=0, description="本次回尾款金额（累加模式，可多次回款，系统会自动累加到已有尾款上）")
     arrival_payment_date: Optional[str] = Field(None, description="首笔回款日期，格式：YYYY-MM-DD（金利必填，豫光可用）")
-    final_payment_date: Optional[str] = Field(None, description="尾款回款日期，格式：YYYY-MM-DD（仅金利使用）")
+    final_payment_date: Optional[str] = Field(None, description="本次尾款回款日期，格式：YYYY-MM-DD（仅金利使用）")
     payment_date: Optional[str] = Field(None, description="回款日期，格式：YYYY-MM-DD（兼容旧接口，豫光可用）")
     remark: Optional[str] = Field(None, description="备注")
 
