@@ -429,6 +429,13 @@ class ContractService:
 
         name_start = name_end = price_start = price_end = qty_start = None
 
+        # 更健壮的数量关键词列表
+        qty_keywords = [
+            "数量", "数", "总数量", "合计", "总计",
+            "数量（吨）", "数(吨)", "吨",
+            "qty", "QTY", "Quantity"
+        ]
+
         for i, line in enumerate(text_lines):
             text = line["text"]
             if text == "品名":
@@ -436,9 +443,12 @@ class ContractService:
             elif "单价" in text and "元" in text and name_start is not None and name_end is None:
                 name_end = i
                 price_start = i
-            elif "数量" in text and "吨" in text and price_start is not None and price_end is None:
-                price_end = i
-                qty_start = i
+            elif price_start is not None and price_end is None:
+                # 放宽数量查找条件：检查是否包含任何数量相关关键词
+                text_clean = text.replace(" ", "").replace("（", "(").replace("）", ")").lower()
+                if any(kw in text_clean or kw.lower() in text_clean for kw in qty_keywords):
+                    price_end = i
+                    qty_start = i
 
         if name_start is not None and name_end is not None:
             names = []
@@ -464,12 +474,6 @@ class ContractService:
                         if val >= 50:
                             total_quantity = val
                             break
-
-            for i, name in enumerate(names):
-                products.append({
-                    "product_name": name,
-                    "unit_price": Decimal(prices[i]) if i < len(prices) else Decimal("0"),
-                })
 
         return products, total_quantity
 
