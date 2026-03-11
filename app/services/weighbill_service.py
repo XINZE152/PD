@@ -33,12 +33,29 @@ class WeighbillService:
 
     def __init__(self):
         self.ocr = None
+        self._weighbill_has_warehouse_name = None
         if RAPIDOCR_AVAILABLE:
             try:
                 self.ocr = RapidOCR()
                 logger.info("磅单OCR初始化成功")
             except Exception as e:
                 logger.error(f"磅单OCR初始化失败: {e}")
+
+    def _has_weighbill_warehouse_name_column(self) -> bool:
+        """兼容旧库：动态检查 pd_weighbills 是否已有 warehouse_name 字段。"""
+        if self._weighbill_has_warehouse_name is not None:
+            return self._weighbill_has_warehouse_name
+
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'warehouse_name'")
+                    self._weighbill_has_warehouse_name = cur.fetchone() is not None
+        except Exception as e:
+            logger.warning(f"检查 pd_weighbills.warehouse_name 字段失败: {e}")
+            self._weighbill_has_warehouse_name = False
+
+        return self._weighbill_has_warehouse_name
 
     # ========== 图片预处理 ==========
 
@@ -507,6 +524,19 @@ class WeighbillService:
                     tuple(params)
                 )
 
+    @staticmethod
+    def _normalize_warehouse_name(data: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        warehouse_name = data.get("warehouse_name")
+        if warehouse_name is None:
+            warehouse_name = data.get("warehouse")
+        if warehouse_name is None and existing:
+            warehouse_name = existing.get("warehouse_name")
+        if warehouse_name is None:
+            return None
+
+        warehouse_name = str(warehouse_name).strip()
+        return warehouse_name or None
+
     def upload_weighbill(
             self,
             delivery_id: int,
@@ -575,6 +605,7 @@ class WeighbillService:
                     final_tare_weight = payload.get("tare_weight") if payload.get("tare_weight") is not None else (existing.get("tare_weight") if existing else None)
                     final_net_weight = payload.get("net_weight") if payload.get("net_weight") is not None else (existing.get("net_weight") if existing else None)
                     final_unit_price = payload.get("unit_price") if payload.get("unit_price") is not None else (existing.get("unit_price") if existing else None)
+                    final_warehouse_name = self._normalize_warehouse_name(payload, existing)
                     final_image_path = temp_file_path if temp_file_path else (existing.get("weighbill_image") if existing else None)
 
                     if final_net_weight in (None, ""):
@@ -606,6 +637,7 @@ class WeighbillService:
                             net_weight_decimal,
                             unit_price_decimal,
                             total_amount_decimal,
+                            final_warehouse_name,
                             final_image_path,
                             final_upload_status,
                             final_ocr_status,
@@ -626,6 +658,7 @@ class WeighbillService:
                                 net_weight = %s,
                                 unit_price = %s,
                                 total_amount = %s,
+                                warehouse_name = %s,
                                 weighbill_image = %s,
                                 upload_status = %s,
                                 ocr_status = %s,
@@ -637,42 +670,51 @@ class WeighbillService:
                             WHERE id = %s
                         """
                         params.extend([final_upload_status, existing['id']])
+                        if not self._has_weighbill_warehouse_name_column():
+                            sql = sql.replace(",\n                                warehouse_name = %s", "")
+                            del params[10]
                         cur.execute(sql, tuple(params))
                         weighbill_id = existing['id']
                         action = 'updated'
                     else:
-                        sql = """
+                        insert_fields = [
+                            "weigh_date", "delivery_time", "weigh_ticket_no", "contract_no",
+                            "delivery_id", "vehicle_no", "product_name", "gross_weight",
+                            "tare_weight", "net_weight", "unit_price", "total_amount",
+                            "weighbill_image", "upload_status", "ocr_status",
+                            "is_manual_corrected", "uploader_id", "uploader_name", "uploaded_at"
+                        ]
+                        insert_values = [
+                            final_weigh_date,
+                            final_delivery_time,
+                            final_weigh_ticket_no,
+                            final_contract_no,
+                            delivery_id,
+                            final_vehicle_no,
+                            normalized_product,
+                            gross_weight_decimal,
+                            tare_weight_decimal,
+                            net_weight_decimal,
+                            unit_price_decimal,
+                            total_amount_decimal,
+                            final_image_path,
+                            final_upload_status,
+                            final_ocr_status,
+                            1 if is_manual else 0,
+                            uploader_id,
+                            uploader_name,
+                        ]
+                        if self._has_weighbill_warehouse_name_column():
+                            insert_fields.insert(4, "warehouse_name")
+                            insert_values.insert(4, final_warehouse_name)
+
+                        placeholders = ", ".join(["%s"] * (len(insert_values)))
+                        sql = f"""
                             INSERT INTO pd_weighbills (
-                                weigh_date, delivery_time, weigh_ticket_no, contract_no,
-                                delivery_id, vehicle_no, product_name, gross_weight,
-                                tare_weight, net_weight, unit_price, total_amount,
-                                weighbill_image, upload_status, ocr_status,
-                                is_manual_corrected, uploader_id, uploader_name, uploaded_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                {', '.join(insert_fields)}
+                            ) VALUES ({placeholders}, NOW())
                         """
-                        cur.execute(
-                            sql,
-                            (
-                                final_weigh_date,
-                                final_delivery_time,
-                                final_weigh_ticket_no,
-                                final_contract_no,
-                                delivery_id,
-                                final_vehicle_no,
-                                normalized_product,
-                                gross_weight_decimal,
-                                tare_weight_decimal,
-                                net_weight_decimal,
-                                unit_price_decimal,
-                                total_amount_decimal,
-                                final_image_path,
-                                final_upload_status,
-                                final_ocr_status,
-                                1 if is_manual else 0,
-                                uploader_id,
-                                uploader_name,
-                            )
-                        )
+                        cur.execute(sql, tuple(insert_values))
                         weighbill_id = cur.lastrowid
                         action = 'created'
 
@@ -682,6 +724,11 @@ class WeighbillService:
             delivery_info = self.get_delivery_info(delivery_id) or {}
             final_payee = delivery_info.get("payee")
             final_warehouse = delivery_info.get("warehouse")
+            final_warehouse_name = payload.get("warehouse_name")
+            if final_warehouse_name is None:
+                final_warehouse_name = payload.get("warehouse")
+            if final_warehouse_name is None and existing:
+                final_warehouse_name = existing.get("warehouse_name")
 
             if temp_file_path and old_image_path and old_image_path != temp_file_path and os.path.exists(old_image_path):
                 try:
@@ -703,6 +750,7 @@ class WeighbillService:
                     "net_weight": float(net_weight_decimal),
                     "total_amount": float(total_amount_decimal) if total_amount_decimal is not None else None,
                     "weighbill_image": final_image_path,
+                    "warehouse_name": final_warehouse_name,
                     "warehouse": final_warehouse,
                     "payee": final_payee,
                 }
@@ -938,6 +986,9 @@ class WeighbillService:
                         if data.get(key):
                             data[key] = float(data[key])
 
+                    if data.get("warehouse_name") is None:
+                        data["warehouse_name"] = data.get("warehouse")
+
                     # 显示字段
                     data["is_manual_corrected_display"] = "是" if data.get("is_manual_corrected") == 1 else "否"
                     data["ocr_status_display"] = data.get("ocr_status", "待上传磅单")
@@ -1102,6 +1153,9 @@ class WeighbillService:
                             if wb.get(key):
                                 wb[key] = float(wb[key])
 
+                        if wb.get("warehouse_name") is None:
+                            wb["warehouse_name"] = wb.get("warehouse")
+
                         # 应打款金额：优先使用结余表应付金额；无结余时按公式估算
                         if wb.get("balance_payable_amount") is not None:
                             wb["payable_amount"] = float(wb.get("balance_payable_amount") or 0)
@@ -1168,6 +1222,7 @@ class WeighbillService:
                                     "id": None,
                                     "delivery_id": delivery_id,
                                     "product_name": product,
+                                    "warehouse_name": delivery.get("warehouse"),
                                     "ocr_status": "待上传磅单",
                                     "ocr_status_display": "待上传磅单",
                                     "upload_status": "待上传",

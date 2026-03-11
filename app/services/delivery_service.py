@@ -106,6 +106,24 @@ class DeliveryService:
         self._products_column_exists = exists
         return exists
 
+    def _weighbill_has_warehouse_name_column(self) -> bool:
+        """兼容旧库：动态检测 pd_weighbills 是否存在 warehouse_name 列。"""
+        cached = getattr(self, "_weighbill_warehouse_name_exists", None)
+        if cached is not None:
+            return cached
+
+        exists = False
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'warehouse_name'")
+                    exists = cur.fetchone() is not None
+        except Exception as e:
+            logger.warning(f"检测 pd_weighbills.warehouse_name 字段失败，将按不存在处理: {e}")
+
+        self._weighbill_warehouse_name_exists = exists
+        return exists
+
     def _get_upload_status(self, image_path: Optional[str]) -> str:
         if image_path and os.path.exists(image_path):
             return "联单已上传"
@@ -317,6 +335,7 @@ class DeliveryService:
                            vehicle_no: str, products: List[str],
                            is_last_for_contract: bool,
                            unit_price: float,
+                           warehouse_name: Optional[str],
                            uploader_id: int,
                            uploader_name: str) -> bool:
         """
@@ -338,20 +357,27 @@ class DeliveryService:
 
                         # 创建磅单，标记最后一车
                         is_last_mark = 1 if is_last_for_contract else 0
-
-                        cur.execute("""
-                            INSERT INTO pd_weighbills 
-                            (delivery_id, contract_no, vehicle_no, product_name,
-                             is_last_truck_for_contract,
-                             unit_price, upload_status, ocr_status,
-                             uploader_id, uploader_name, uploaded_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                        """, (
+                        insert_fields = [
+                            "delivery_id", "contract_no", "vehicle_no", "product_name",
+                            "is_last_truck_for_contract", "unit_price", "upload_status",
+                            "ocr_status", "uploader_id", "uploader_name", "uploaded_at"
+                        ]
+                        insert_values = [
                             delivery_id, contract_no, vehicle_no, product_name,
-                            is_last_mark,
-                            unit_price, '待上传', '待上传磅单',
+                            is_last_mark, unit_price, '待上传', '待上传磅单',
                             uploader_id, uploader_name
-                        ))
+                        ]
+
+                        if self._weighbill_has_warehouse_name_column():
+                            insert_fields.insert(4, "warehouse_name")
+                            insert_values.insert(4, warehouse_name)
+
+                        placeholders = ", ".join(["%s"] * len(insert_values))
+                        cur.execute(f"""
+                            INSERT INTO pd_weighbills 
+                            ({', '.join(insert_fields)})
+                            VALUES ({placeholders}, NOW())
+                        """, tuple(insert_values))
 
                     logger.info(f"报单{delivery_id}:创建{len(products)}个品种磅单,"
                                f"合同最后一单={is_last_for_contract}")
@@ -668,6 +694,7 @@ class DeliveryService:
                             products=products,
                             is_last_for_contract=is_last_delivery,
                             unit_price=unit_price,
+                            warehouse_name=data.get('warehouse'),
                             uploader_id=uploader_id,
                             uploader_name=uploader_name
                         )

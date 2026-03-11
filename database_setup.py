@@ -198,6 +198,7 @@ TABLE_STATEMENTS = [
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
 		weigh_date DATE COMMENT '磅单日期',
 		delivery_time DATETIME COMMENT '送货时间',
+		warehouse_name VARCHAR(64) COMMENT '磅单仓库名称',
 		weigh_ticket_no VARCHAR(64) COMMENT '过磅单号',
 		contract_no VARCHAR(64) COMMENT '合同编号（OCR识别）',
 		delivery_id BIGINT COMMENT '关联的报货订单ID（通过日期+车牌匹配）',
