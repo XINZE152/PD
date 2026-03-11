@@ -35,32 +35,41 @@ def _decode_token(token: str) -> Dict[str, Any]:
 
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+    import logging
+    logger = logging.getLogger("core.auth")
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            logger.warning("auth failed: Missing token, Authorization header=%s", authorization)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
-    token = authorization.split(" ", 1)[1].strip()
-    payload = _decode_token(token)
+        token = authorization.split(" ", 1)[1].strip()
+        payload = _decode_token(token)
 
-    user_id = payload.get("uid") or payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+        user_id = payload.get("uid") or payload.get("sub")
+        if not user_id:
+            logger.warning("auth failed: Invalid token payload, Authorization header=%s", authorization)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, account, role, status FROM pd_users WHERE id = %s",
-                (user_id,),
-            )
-            user = cur.fetchone()
-            if not user or user.get("status") == 2:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, account, role, status FROM pd_users WHERE id = %s",
+                    (user_id,),
+                )
+                user = cur.fetchone()
+                if not user or user.get("status") == 2:
+                    logger.warning("auth failed: User not found, user_id=%s, Authorization header=%s", user_id, authorization)
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
-            return {
-                "id": user["id"],
-                "name": user.get("name"),
-                "account": user.get("account"),
-                "role": user.get("role"),
-            }
+                return {
+                    "id": user["id"],
+                    "name": user.get("name"),
+                    "account": user.get("account"),
+                    "role": user.get("role"),
+                }
+    except HTTPException as e:
+        logger.warning("auth failed: %s, Authorization header=%s", e.detail, authorization)
+        raise
 
 
 def get_user_identity_from_authorization(authorization: Optional[str]) -> str:
