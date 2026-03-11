@@ -1463,15 +1463,17 @@ class PaymentService:
             updated_by: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        编辑回款金额
+        编辑回款金额（支持金利多次回尾款，尾款累加模式）
 
         逻辑：
-        1. 更新 arrival_paid_amount、final_paid_amount
-        2. 自动计算 paid_amount = arrival_paid_amount + final_paid_amount
-        3. 自动计算 unpaid_amount = total_amount - paid_amount
-        4. 自动判断 collection_status
-        5. 同步更新 pd_payment_records 中的对应记录金额
-        6. 更新 last_payment_date
+        1. 首笔金额：覆盖模式（直接设置新值）
+        2. 尾款金额：累加模式（新值加到原有值上）
+        3. 自动计算 paid_amount = arrival_paid_amount + final_paid_amount(累计)
+        4. 自动计算 unpaid_amount = total_amount - paid_amount
+        5. 自动判断 collection_status：
+           - 金利：尾款累计达到应回尾款金额 → 已回款，否则 → 已回首笔待回尾款
+        6. 同步更新 pd_payment_records 中的对应记录金额
+        7. 更新 last_payment_date
         """
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1523,56 +1525,77 @@ class PaymentService:
                 smelter_name = detail["smelter_name"] or ""
                 is_jinli = "金利" in smelter_name
 
-                # 新值（如果没传则保持原值）
+                # 应回款金额
+                arrival_payment_amount = Decimal(str(detail.get("arrival_payment_amount") or 0))
+                final_payment_amount = Decimal(str(detail.get("final_payment_amount") or 0))
+
+                # 当前已付金额
                 cur_arrival = Decimal(str(detail.get("arrival_paid_amount") or 0))
                 cur_final = Decimal(str(detail.get("final_paid_amount") or 0))
 
-                new_arrival = Decimal(str(arrival_paid_amount)) if arrival_paid_amount is not None else cur_arrival
-                new_final = Decimal(str(final_paid_amount)) if final_paid_amount is not None else cur_final
+                # 新值计算
+                # 首笔：覆盖模式（直接设置）
+                if arrival_paid_amount is not None:
+                    new_arrival = Decimal(str(arrival_paid_amount))
+                else:
+                    new_arrival = cur_arrival
+
+                # 尾款：累加模式（新值加到原有值上）
+                if final_paid_amount is not None:
+                    # 累加：新输入的金额加到已付尾款上
+                    new_final = cur_final + Decimal(str(final_paid_amount))
+                else:
+                    new_final = cur_final
 
                 # 豫光：尾款强制为0
                 if not is_jinli:
                     new_final = Decimal('0')
 
-                # 自动计算
+                # 自动计算总额
                 new_paid = new_arrival + new_final
                 new_unpaid = total_amount - new_paid
 
-                # 确定回款状态
-                if is_jinli:
-                    if new_final > 0:
-                        collection_status = 2
-                        status_name = "已回款"
-                    elif new_arrival > 0:
-                        collection_status = 1
-                        status_name = "已回首笔待回款尾款"
-                    else:
-                        collection_status = 0
-                        status_name = "待回款"
-                else:  # 豫光或其他
-                    collection_status = 2 if new_arrival > 0 else 0
-                    status_name = "已回款" if new_arrival > 0 else "待回款"
+                # 确保不超过应付总额
+                if new_paid > total_amount:
+                    raise ValueError(f"累计回款金额({float(new_paid):.2f})不能超过应付总额({float(total_amount):.2f})")
 
+                # 确定回款状态和日期
                 if is_jinli:
-
+                    # 金利：分阶段回款
                     arrival_date = arrival_payment_date or payment_date or existing_arrival_date
 
-                    # 首笔日期必须填写
+                    # 首笔日期必须填写（如果有首笔回款）
                     if new_arrival > 0 and not arrival_date:
                         raise ValueError("金利首笔回款必须填写回款日期")
 
-                    final_date = final_payment_date or existing_final_date
-                    # 金利：尾款日期
+                    # 尾款日期处理
                     if final_payment_date:
                         final_date = final_payment_date
-                    elif payment_date and new_final > cur_final:
+                    elif payment_date and final_paid_amount is not None and Decimal(str(final_paid_amount)) > 0:
+                        # 只有实际有新增尾款时才更新日期
                         final_date = payment_date
+                    else:
+                        final_date = existing_final_date
 
-                    # 尾款日期必须填写；如果此前已录入过尾款日期，则允许沿用
-                    if new_final > 0 and not final_date:
+                    # 如果有新增尾款，必须有日期
+                    if final_paid_amount is not None and Decimal(str(final_paid_amount)) > 0 and not final_date:
                         raise ValueError("金利尾款回款必须填写回款日期")
+
+                    # 判断回款状态
+                    # 尾款累计达到应回尾款金额 → 已回款(2)
+                    # 否则 → 已回首笔待回尾款(1)
+                    if new_final >= final_payment_amount and new_arrival >= arrival_payment_amount:
+                        collection_status = 2
+                        status_name = "已回款"
+                    elif new_arrival > 0 or new_final > 0:
+                        collection_status = 1
+                        status_name = "已回首笔待回尾款"
+                    else:
+                        collection_status = 0
+                        status_name = "待回款"
+
                 else:
-                    # 豫光：只有一个日期
+                    # 豫光：一次性回款
                     single_date = arrival_payment_date or payment_date or existing_arrival_date
 
                     if new_arrival > 0 and not single_date:
@@ -1580,7 +1603,11 @@ class PaymentService:
                     if not single_date and new_arrival > cur_arrival:
                         single_date = datetime.now().strftime('%Y-%m-%d')
                     arrival_date = single_date
-                    final_date = None  # 豫光没有尾款日期
+                    final_date = None
+
+                    # 豫光：只要有回款就是已回款
+                    collection_status = 2 if new_arrival > 0 else 0
+                    status_name = "已回款" if new_arrival > 0 else "待回款"
 
                 # 确定payment_detail总状态
                 if new_paid >= total_amount:
@@ -1593,7 +1620,7 @@ class PaymentService:
                 # 更新收款明细
                 update_fields = [
                     "arrival_paid_amount = %s",
-                    "final_paid_amount = %s", 
+                    "final_paid_amount = %s",
                     "paid_amount = %s",
                     "unpaid_amount = %s",
                     "collection_status = %s",
@@ -1613,41 +1640,42 @@ class PaymentService:
                 if has_detail_updated_at:
                     update_fields.append("updated_at = %s")
                     params.append(datetime.now())
-                
+
                 # 检查并更新日期字段
                 cur.execute(f"SHOW COLUMNS FROM {PaymentService.TABLE_NAME} LIKE 'arrival_payment_date'")
                 has_arrival_date_col = cur.fetchone() is not None
                 cur.execute(f"SHOW COLUMNS FROM {PaymentService.TABLE_NAME} LIKE 'final_payment_date'")
                 has_final_date_col = cur.fetchone() is not None
-                
+
                 if has_arrival_date_col and arrival_date:
                     update_fields.append("arrival_payment_date = %s")
                     params.append(arrival_date)
                 if has_final_date_col and final_date:
                     update_fields.append("final_payment_date = %s")
                     params.append(final_date)
-                    
+
                 params.append(payment_id)
-                
-                # ✅ 构建并执行 UPDATE SQL
+
+                # 构建并执行 UPDATE SQL
                 update_sql = f"""
                     UPDATE {_quote_identifier(PaymentService.TABLE_NAME)}
                     SET {', '.join(update_fields)}
                     WHERE id = %s
                 """
                 cur.execute(update_sql, tuple(params))
-                
+
                 # 同步更新回款记录
-                # 更新首笔记录（阶段0）
-                if arrival_paid_amount is not None or (is_jinli and arrival_payment_date) or (not is_jinli and payment_date):
+                # 更新首笔记录（阶段0）- 覆盖模式
+                if arrival_paid_amount is not None or (is_jinli and arrival_payment_date) or (
+                        not is_jinli and payment_date):
                     cur.execute(f"""
                         SELECT id, payment_date FROM {PaymentService.RECORD_TABLE}
                         WHERE payment_detail_id = %s AND payment_stage = 0
                     """, (payment_id,))
                     arrival_record = cur.fetchone()
-                    
+
                     record_date = arrival_date or datetime.now().strftime('%Y-%m-%d')
-                    
+
                     if arrival_record:
                         # 更新现有记录
                         arrival_update_fields = [
@@ -1679,8 +1707,8 @@ class PaymentService:
                              payment_method, remark, recorded_by, created_at)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """, (
-                            payment_id, 
-                            float(new_arrival), 
+                            payment_id,
+                            float(new_arrival),
                             0,
                             record_date,
                             "银行转账",
@@ -1689,25 +1717,26 @@ class PaymentService:
                             datetime.now()
                         ))
 
-                # 更新尾款记录（阶段2）- 仅金利有
+                # 更新尾款记录（阶段2）- 仅金利有，累加模式
                 if is_jinli and (final_paid_amount is not None or final_payment_date):
                     cur.execute(f"""
                         SELECT id FROM {PaymentService.RECORD_TABLE}
                         WHERE payment_detail_id = %s AND payment_stage = 2
                     """, (payment_id,))
                     final_record = cur.fetchone()
-                    
+
                     record_date = final_date or datetime.now().strftime('%Y-%m-%d')
-                    
+
                     if final_record:
+                        # 更新现有记录 - 累加金额
                         final_update_fields = [
-                            "payment_amount = %s",
+                            "payment_amount = %s",  # 使用新的累计尾款金额
                             "payment_date = %s",
                             "remark = COALESCE(%s, remark)",
                             "recorded_by = COALESCE(%s, recorded_by)"
                         ]
                         final_update_params = [
-                            float(new_final),
+                            float(new_final),  # 累计尾款金额
                             record_date,
                             remark or "尾款回款",
                             updated_by,
@@ -1754,7 +1783,8 @@ class PaymentService:
                     "arrival_payment_date": arrival_date,
                     "final_payment_date": final_date if is_jinli else None,
                     "last_payment_date": final_date or arrival_date,
-                    "message": "回款更新成功"
+                    "message": "回款更新成功",
+                    "final_payment_progress": f"{float(new_final)}/{float(final_payment_amount)}" if is_jinli else None
                 }
     @staticmethod
     def get_payment_detail(payment_id: int) -> Optional[Dict[str, Any]]:
