@@ -795,7 +795,7 @@ class ContractService:
                     cur.execute(f"""
                         SELECT c.*, 
                                (SELECT COUNT(*) FROM pd_contract_products WHERE contract_id = c.id) as product_count,
-                               (SELECT COUNT(*) FROM pd_deliveries d WHERE d.contract_no = c.contract_no) as truck_count
+                               (SELECT COUNT(*) FROM pd_deliveries d WHERE d.contract_no = c.contract_no) as delivery_count
                         FROM pd_contracts c
                         {where_sql}
                         ORDER BY c.seq_no DESC, c.created_at DESC

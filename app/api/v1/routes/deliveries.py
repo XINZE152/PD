@@ -48,7 +48,7 @@ class DeliveryUpdateRequest(BaseModel):
     uploaded_by: Optional[str] = None
     reporter_id: Optional[int] = None  # 新增
     reporter_name: Optional[str] = None  # 新增
-
+    contract_no: Optional[str] = None
 
 class DeliveryOut(BaseModel):
     id: int
