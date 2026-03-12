@@ -12,11 +12,11 @@ class CustomerService:
     """客户服务"""
 
     def create_warehouse_payee(self, data: Dict) -> Dict[str, Any]:
-        """新增库房收款员信息（不再接收 warehouse_name，由后端自动处理）"""
+        """新增库房收款员信息（warehouse_name 改为可选，不强制填写）"""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    # warehouse_name 由后端自动处理，这里传空字符串或默认值
+                    # warehouse_name 从请求数据中获取，不传则默认为空字符串
                     cur.execute(
                         """
                         INSERT INTO pd_warehouse_payees
@@ -24,7 +24,7 @@ class CustomerService:
                         VALUES (%s, %s, %s, %s, %s)
                         """,
                         (
-                            "",  # 或根据业务逻辑自动填充
+                            data.get("warehouse_name", ""),  # 从请求获取，默认为空
                             data.get("payee_name"),
                             data.get("payee_account"),
                             data.get("payee_bank_name"),
