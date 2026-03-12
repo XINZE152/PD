@@ -8,13 +8,14 @@ from core.database import get_conn
 from core.logging import get_logger
 from core.table_access import build_dynamic_select
 from core.auth import create_access_token, get_current_user
+from pymysql.cursors import DictCursor  
 from services.pd_auth_service import (
     AuthService, 
     UserStatus, 
     UserRole,
     verify_pwd,
     hash_pwd,
-    PermissionService,  # 新增导入
+    PermissionService,
 )
 
 logger = get_logger(__name__)
@@ -865,7 +866,7 @@ def list_warehouses(
 ):
     """获取库房列表"""
     with get_conn() as conn:
-        with conn.cursor() as cur:
+        with conn.cursor(DictCursor) as cur:  # 使用 DictCursor
             where = ["1=1"]
             params = []
             if keyword:
@@ -884,9 +885,9 @@ def list_warehouses(
                 ORDER BY w.created_at DESC
             """, tuple(params))
             
-            columns = [desc[0] for desc in cur.description]
-            rows = cur.fetchall()
-            return {"success": True, "data": [dict(zip(columns, row)) for row in rows]}
+            # DictCursor 直接返回字典列表
+            data = cur.fetchall()
+            return {"success": True, "data": data}
 
 @router.get("/warehouses/{warehouse_id}", summary="库房详情")
 def get_warehouse(
@@ -895,23 +896,18 @@ def get_warehouse(
 ):
     """获取库房详情（包含收款人列表）"""
     with get_conn() as conn:
-        with conn.cursor() as cur:
+        with conn.cursor(DictCursor) as cur:  # 使用 DictCursor
             cur.execute("SELECT * FROM pd_warehouses WHERE id=%s", (warehouse_id,))
-            row = cur.fetchone()
-            if not row:
+            warehouse = cur.fetchone()
+            if not warehouse:
                 raise HTTPException(status_code=404, detail="库房不存在")
-            
-            columns = [desc[0] for desc in cur.description]
-            warehouse = dict(zip(columns, row))
             
             # 获取该库房的收款人
             cur.execute("""
                 SELECT id, payee_name, payee_account, payee_bank_name, is_active
                 FROM pd_payees WHERE warehouse_id=%s
             """, (warehouse_id,))
-            payee_columns = [desc[0] for desc in cur.description]
-            payees = [dict(zip(payee_columns, r)) for r in cur.fetchall()]
-            warehouse['payees'] = payees
+            warehouse['payees'] = cur.fetchall()
             
             return {"success": True, "data": warehouse}
 
@@ -989,7 +985,7 @@ def create_payee(
     check_manager_permission(current_user)
     
     with get_conn() as conn:
-        with conn.cursor() as cur:
+        with conn.cursor(DictCursor) as cur:
             # 验证库房是否存在
             cur.execute("SELECT 1 FROM pd_warehouses WHERE id=%s", (body.warehouse_id,))
             if not cur.fetchone():
@@ -1013,7 +1009,7 @@ def list_payees(
 ):
     """获取收款人列表"""
     with get_conn() as conn:
-        with conn.cursor() as cur:
+        with conn.cursor(DictCursor) as cur:
             where = ["1=1"]
             params = []
             if warehouse_id:

@@ -33,24 +33,25 @@ class CustomerUpdateRequest(BaseModel):
 
 
 class WarehousePayeeCreateRequest(BaseModel):
-    """库房收款员新增请求"""
+    """收款员新增请求"""
     
     warehouse_id: Optional[int] = Field(None, description="库房ID，可选")
-    warehouse_name: Optional[str] = Field(None, description="库房名称", max_length=100)
-    payee_name: str = Field(..., min_length=1, max_length=100)
-    payee_account: Optional[str] = Field(None, max_length=100)
-    payee_bank_name: Optional[str] = Field(None, max_length=100)
-    is_active: int = Field(1, ge=0, le=1)
+    warehouse_name: Optional[str] = Field(None, description="库房名称，可选", max_length=100)
+    payee_name: str = Field(..., min_length=1, max_length=100, description="收款人姓名")
+    payee_account: Optional[str] = Field(None, max_length=100, description="收款账号")
+    payee_bank_name: Optional[str] = Field(None, max_length=100, description="开户行")
+    is_active: int = Field(1, ge=0, le=1, description="是否启用: 1启用, 0禁用")
 
 
 class WarehousePayeeUpdateRequest(BaseModel):
-    """库房收款员编辑请求"""
+    """收款员编辑请求"""
 
-    # warehouse_name 字段已移除，后端自动处理
-    payee_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    payee_account: Optional[str] = Field(None, max_length=100)
-    payee_bank_name: Optional[str] = Field(None, max_length=100)
-    is_active: Optional[int] = Field(None, ge=0, le=1)
+    warehouse_id: Optional[int] = Field(None, description="库房ID，可选")
+    warehouse_name: Optional[str] = Field(None, description="库房名称，可选", max_length=100)
+    payee_name: Optional[str] = Field(None, min_length=1, max_length=100, description="收款人姓名")
+    payee_account: Optional[str] = Field(None, max_length=100, description="收款账号")
+    payee_bank_name: Optional[str] = Field(None, max_length=100, description="开户行")
+    is_active: Optional[int] = Field(None, ge=0, le=1, description="是否启用: 1启用, 0禁用")
 
 
 class CustomerOut(BaseModel):

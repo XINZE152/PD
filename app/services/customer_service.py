@@ -4,6 +4,7 @@
 import logging
 from typing import Dict, Optional, Any
 from app.services.contract_service import get_conn
+from pymysql.cursors import DictCursor
 
 logger = logging.getLogger(__name__)
 
@@ -12,23 +13,13 @@ class CustomerService:
     """客户服务"""
 
     def create_warehouse_payee(self, data: Dict) -> Dict[str, Any]:
-        """新增库房收款员信息"""
+        """新增收款员信息（不强制关联库房）"""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    # 获取库房名称（优先使用传入的，或通过ID查询）
+                    # 收款员不强制关联库房，直接使用传入的值
                     warehouse_id = data.get("warehouse_id")
-                    warehouse_name = data.get("warehouse_name", "")
-                    
-                    # 如果传了 warehouse_id，查询对应的库房名称
-                    if warehouse_id:
-                        cur.execute(
-                            "SELECT warehouse_name FROM pd_warehouses WHERE id = %s",
-                            (warehouse_id,)
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            warehouse_name = row[0]
+                    warehouse_name = data.get("warehouse_name")
                     
                     cur.execute(
                         """
@@ -37,33 +28,36 @@ class CustomerService:
                         VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            warehouse_id,  # 可能为 None
-                            warehouse_name,  # 可能为空字符串
+                            warehouse_id,
+                            warehouse_name,
                             data.get("payee_name"),
                             data.get("payee_account"),
                             data.get("payee_bank_name"),
                             data.get("is_active", 1),
                         ),
                     )
+                    conn.commit()  # 确保提交事务
+                    
                     return {
                         "success": True,
-                        "message": "库房收款员信息创建成功",
+                        "message": "收款员信息创建成功",
                         "data": {"id": cur.lastrowid},
                     }
         except Exception as e:
-            logger.error(f"创建库房收款员信息失败: {e}")
+            logger.error(f"创建收款员信息失败: {e}")
             return {"success": False, "error": str(e)}
 
     def update_warehouse_payee(self, payee_id: int, data: Dict) -> Dict[str, Any]:
-        """编辑库房收款员信息"""
+        """编辑收款员信息"""
         try:
             with get_conn() as conn:
-                with conn.cursor() as cur:
+                with conn.cursor(DictCursor) as cur:
                     cur.execute("SELECT id FROM pd_warehouse_payees WHERE id = %s", (payee_id,))
                     if not cur.fetchone():
                         return {"success": False, "error": f"记录ID {payee_id} 不存在"}
 
                     allowed_fields = [
+                        "warehouse_id",      # 添加库房ID字段
                         "warehouse_name",
                         "payee_name",
                         "payee_account",
@@ -85,14 +79,15 @@ class CustomerService:
                         f"UPDATE pd_warehouse_payees SET {', '.join(update_fields)} WHERE id = %s",
                         tuple(params),
                     )
+                    conn.commit()  # 确保提交事务
 
                     return {
                         "success": True,
-                        "message": "库房收款员信息更新成功",
+                        "message": "收款员信息更新成功",
                         "data": {"id": payee_id},
                     }
         except Exception as e:
-            logger.error(f"更新库房收款员信息失败: {e}")
+            logger.error(f"更新收款员信息失败: {e}")
             return {"success": False, "error": str(e)}
 
     def list_warehouse_payees(
@@ -103,10 +98,11 @@ class CustomerService:
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
-        """查询库房收款员信息列表"""
+        """查询收款员信息列表"""
         try:
             with get_conn() as conn:
-                with conn.cursor() as cur:
+                # 使用 DictCursor 直接返回字典格式
+                with conn.cursor(DictCursor) as cur:
                     where_clauses = []
                     params = []
 
@@ -122,17 +118,20 @@ class CustomerService:
 
                     where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
+                    # 查询总数
                     cur.execute(
-                        f"SELECT COUNT(*) FROM pd_warehouse_payees {where_clause}",
+                        f"SELECT COUNT(*) as total FROM pd_warehouse_payees {where_clause}",
                         tuple(params),
                     )
-                    total = cur.fetchone()[0]
+                    result = cur.fetchone()
+                    total = result['total'] if result else 0
 
+                    # 查询分页数据
                     offset = (page - 1) * page_size
                     cur.execute(
                         f"""
-                        SELECT id, warehouse_name, payee_name, payee_account, payee_bank_name, is_active,
-                               created_at, updated_at
+                        SELECT id, warehouse_id, warehouse_name, payee_name, payee_account, 
+                               payee_bank_name, is_active, created_at, updated_at
                         FROM pd_warehouse_payees
                         {where_clause}
                         ORDER BY id DESC
@@ -141,9 +140,8 @@ class CustomerService:
                         tuple(params + [page_size, offset]),
                     )
 
-                    columns = [desc[0] for desc in cur.description]
-                    rows = cur.fetchall()
-                    data = [dict(zip(columns, row)) for row in rows]
+                    # DictCursor 直接返回字典列表
+                    data = cur.fetchall()
 
                     return {
                         "success": True,
@@ -153,7 +151,7 @@ class CustomerService:
                         "page_size": page_size,
                     }
         except Exception as e:
-            logger.error(f"查询库房收款员信息失败: {e}")
+            logger.error(f"查询收款员信息失败: {e}")
             return {"success": False, "error": str(e), "data": [], "total": 0}
 
     def create_customer(self, data: Dict) -> Dict[str, Any]:

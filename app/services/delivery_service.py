@@ -26,6 +26,60 @@ STANDARD_TRUCK_CAPACITY = Decimal('35')
 
 class DeliveryService:
     """报货订单服务"""
+    # ============ 文本提取和合同匹配方法 ============
+    
+    # 字段识别模式（多种变体）
+    FIELD_PATTERNS = {
+        'vehicle_no': [
+            r'车号[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
+            r'车牌[号]?[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
+            r'vehicle_no[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
+        ],
+        'driver_name': [
+            r'司机[姓名]?[：:]?\s*([\u4e00-\u9fa5]{2,4})',
+            r'驾驶员[：:]?\s*([\u4e00-\u9fa5]{2,4})',
+            r'driver_name[：:]?\s*([\u4e00-\u9fa5]{2,4})',
+            r'姓名[：:]?\s*([\u4e00-\u9fa5]{2,4})',
+        ],
+        'driver_id_card': [
+            r'身份证[号]?[：:]?\s*(\d{17}[\dXx])',
+            r'身份证号[：:]?\s*(\d{17}[\dXx])',
+            r'driver_id_card[：:]?\s*(\d{17}[\dXx])',
+        ],
+        'driver_phone': [
+            r'电话[：:]?\s*(1[3-9]\d{9})',
+            r'手机[号]?[：:]?\s*(1[3-9]\d{9})',
+            r'联系电话[：:]?\s*(1[3-9]\d{9})',
+            r'driver_phone[：:]?\s*(1[3-9]\d{9})',
+            r'电话\s*(\d{11})',
+        ],
+        'product_name': [
+            r'品类[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'品种[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'货物[名称]?[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'product_name[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'品名[：:]?\s*([\u4e00-\u9fa5]+)',
+        ],
+        'has_delivery_order': [
+            (r'(自带联单|有联单)', '有'),
+            (r'联单[：:]?\s*(有|是|true|1)', '有'),
+            (r'has_delivery_order[：:]?\s*(有|是|true|1)', '有'),
+            (r'(?<!无)(?<!没有)(?<![没不])联单(?!费)(?!号)(?!价)', '有'),
+            (r'(无联单|没有联单|不带联单)', '无'),
+            (r'联单[：:]?\s*(无|否|false|0)', '无'),
+            (r'has_delivery_order[：:]?\s*(无|否|false|0)', '无'),
+            (r'没.*联单', '无'),
+            (r'无.*联单', '无'),
+        ],
+        'factory_name': [
+            (r'(金利|豫光|万洋|大华|金凤|南方|中原|华铂)', None),
+            r'冶炼厂[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'目标工厂[：:]?\s*([\u4e00-\u9fa5]+)',
+            r'target_factory_name[：:]?\s*([\u4e00-\u9fa5]+)',
+        ],
+    }
+
+    LICENSE_PLATE_PATTERN = r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}[A-Z0-9挂学警港澳]?'
 
     def _normalize_driver_id_card(self, value: Optional[Any]) -> Optional[str]:
         """清洗司机身份证号，避免将无效超长值写入数据库。"""
@@ -1314,9 +1368,266 @@ class DeliveryService:
             logger.error(f"删除订单失败: {e}")
             return {"success": False, "error": str(e)}
 
+    # ============ 新增：文本提取和合同匹配方法 ============
+        
+    def extract_from_text(self, text: str) -> Dict[str, Optional[str]]:
+        """从非结构化文本中提取报单信息"""
+        result = {
+            'vehicle_no': None,
+            'driver_name': None,
+            'driver_id_card': None,
+            'driver_phone': None,
+            'product_name': None,
+            'has_delivery_order': '无',
+            'factory_name': None,
+            'raw_text': text,
+        }
+            
+        cleaned_text = text.replace('：', ':').strip()
+        found_delivery_order = False
+        delivery_order_value = '无'
+        
+        for field_name, patterns in self.FIELD_PATTERNS.items():
+            for pattern_info in patterns:
+                if isinstance(pattern_info, tuple):
+                    pattern, default_value = pattern_info
+                else:
+                    pattern = pattern_info
+                    default_value = None
+                
+                match = re.search(pattern, cleaned_text, re.IGNORECASE)
+                if match:
+                    value = match.group(1) if match.groups() else match.group(0)
+                    value = value.strip()
+                    
+                    if field_name == 'has_delivery_order':
+                        found_delivery_order = True
+                        if default_value:
+                            delivery_order_value = default_value
+                        else:
+                            value_lower = value.lower()
+                            if any(kw in value_lower for kw in ['无', '没有', '否', 'false', '0', '不带']):
+                                delivery_order_value = '无'
+                            else:
+                                delivery_order_value = '有'
+                    else:
+                        result[field_name] = value
+                    break
+        
+        result['has_delivery_order'] = delivery_order_value
+        return result
+
+    def validate_extracted(self, data: Dict[str, Optional[str]]) -> Dict[str, any]:
+        """验证提取的数据完整性"""
+        required_fields = ['vehicle_no', 'driver_name', 'driver_phone']
+        missing = [f for f in required_fields if not data.get(f)]
+        
+        if data.get('driver_id_card'):
+            id_card = data['driver_id_card']
+            if not re.match(r'^\d{17}[\dXx]$', id_card):
+                data['driver_id_card_error'] = '身份证号格式不正确'
+        
+        if data.get('vehicle_no'):
+            plate = data['vehicle_no']
+            if not re.match(self.LICENSE_PLATE_PATTERN, plate):
+                data['vehicle_no_error'] = '车牌号格式不正确'
+        
+        return {
+            'is_valid': len(missing) == 0,
+            'missing_fields': missing,
+            'data': data
+        }
+
+    def match_contract_by_factory_and_product(
+        self, 
+        factory_name: Optional[str], 
+        product_name: Optional[str],
+        report_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """根据工厂名称和品种匹配合同"""
+        if not factory_name or not product_name:
+            return {
+                'matched': False,
+                'contract_no': None,
+                'contract_id': None,
+                'unit_price': None,
+                'smelter_company': None,
+                'match_type': 'none',
+                'reason': '工厂名称或品种为空'
+            }
+        
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    effective_date = report_date or datetime.today().date().isoformat()
+                    
+                    # 工厂别名映射
+                    factory_keywords = [factory_name]
+                    factory_aliases = {
+                        '金利': ['金利', '河南金利', '金利金铅'],
+                        '豫光': ['豫光', '河南豫光', '豫光金铅'],
+                        '万洋': ['万洋', '河南万洋'],
+                        '大华': ['大华', '河北大华'],
+                        '金凤': ['金凤', '河北金凤'],
+                        '南方': ['南方', '广东南方'],
+                        '中原': ['中原', '河南中原'],
+                        '华铂': ['华铂', '安徽华铂'],
+                    }
+                    
+                    for key, aliases in factory_aliases.items():
+                        if key in factory_name:
+                            factory_keywords.extend(aliases)
+                    
+                    factory_keywords = list(set(factory_keywords))
+                    
+                    # 构建工厂查询条件
+                    factory_conditions = []
+                    for keyword in factory_keywords:
+                        factory_conditions.append("c.smelter_company LIKE %s")
+                    
+                    factory_sql = " OR ".join(factory_conditions)
+                    factory_params = [f"%{k}%" for k in factory_keywords]
+                    
+                    # 先精确匹配品种
+                    sql = f"""
+                        SELECT 
+                            c.id,
+                            c.contract_no,
+                            c.smelter_company,
+                            p.unit_price,
+                            p.product_name as matched_product,
+                            c.contract_date,
+                            c.end_date
+                        FROM pd_contracts c
+                        JOIN pd_contract_products p ON p.contract_id = c.id
+                        WHERE ({factory_sql})
+                        AND p.product_name = %s
+                        AND c.status = '生效中'
+                        AND c.contract_date <= %s
+                        AND (c.end_date IS NULL OR c.end_date >= %s)
+                        ORDER BY c.created_at DESC
+                        LIMIT 1
+                    """
+                    
+                    params = factory_params + [product_name, effective_date, effective_date]
+                    cur.execute(sql, tuple(params))
+                    
+                    row = cur.fetchone()
+                    
+                    if row:
+                        return {
+                            'matched': True,
+                            'contract_no': row['contract_no'] if isinstance(row, dict) else row[1],
+                            'contract_id': row['id'] if isinstance(row, dict) else row[0],
+                            'unit_price': float(row['unit_price']) if (row['unit_price'] if isinstance(row, dict) else row[3]) else None,
+                            'smelter_company': row['smelter_company'] if isinstance(row, dict) else row[2],
+                            'match_type': 'exact',
+                            'matched_product': row['matched_product'] if isinstance(row, dict) else row[4],
+                        }
+                    
+                    # 模糊匹配品种
+                    fuzzy_sql = f"""
+                        SELECT 
+                            c.id,
+                            c.contract_no,
+                            c.smelter_company,
+                            p.unit_price,
+                            p.product_name as matched_product,
+                            c.contract_date,
+                            c.end_date
+                        FROM pd_contracts c
+                        JOIN pd_contract_products p ON p.contract_id = c.id
+                        WHERE ({factory_sql})
+                        AND p.product_name LIKE %s
+                        AND c.status = '生效中'
+                        AND c.contract_date <= %s
+                        AND (c.end_date IS NULL OR c.end_date >= %s)
+                        ORDER BY c.created_at DESC
+                        LIMIT 1
+                    """
+                    
+                    fuzzy_params = factory_params + [f"%{product_name}%", effective_date, effective_date]
+                    cur.execute(fuzzy_sql, tuple(fuzzy_params))
+                    
+                    row = cur.fetchone()
+                    
+                    if row:
+                        return {
+                            'matched': True,
+                            'contract_no': row['contract_no'] if isinstance(row, dict) else row[1],
+                            'contract_id': row['id'] if isinstance(row, dict) else row[0],
+                            'unit_price': float(row['unit_price']) if (row['unit_price'] if isinstance(row, dict) else row[3]) else None,
+                            'smelter_company': row['smelter_company'] if isinstance(row, dict) else row[2],
+                            'match_type': 'fuzzy',
+                            'matched_product': row['matched_product'] if isinstance(row, dict) else row[4],
+                        }
+                    
+                    return {
+                        'matched': False,
+                        'contract_no': None,
+                        'contract_id': None,
+                        'unit_price': None,
+                        'smelter_company': None,
+                        'match_type': 'none',
+                        'reason': f'未找到工厂[{factory_name}]品种[{product_name}]的生效合同'
+                    }
+                    
+        except Exception as e:
+            logger.error(f"合同匹配失败: {e}")
+            return {
+                'matched': False,
+                'contract_no': None,
+                'contract_id': None,
+                'unit_price': None,
+                'smelter_company': None,
+                'match_type': 'error',
+                'reason': f'匹配异常: {str(e)}'
+            }
+
+    def extract_with_contract(
+        self, 
+        text: str, 
+        report_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """提取信息并自动匹配合同"""
+        # 1. 提取基础信息
+        extracted = self.extract_from_text(text)
+        
+        # 2. 验证数据
+        validation = self.validate_extracted(extracted.copy())
+        
+        # 3. 匹配合同
+        contract_match = self.match_contract_by_factory_and_product(
+            factory_name=extracted.get('factory_name'),
+            product_name=extracted.get('product_name'),
+            report_date=report_date
+        )
+        
+        # 4. 组装结果
+        result = {
+            'success': True,
+            'extracted': extracted,
+            'validation': validation,
+            'contract_match': contract_match,
+            'ready_to_create': validation['is_valid'] and contract_match['matched']
+        }
+        
+        # 5. 如果匹配成功，添加合同信息到提取数据
+        if contract_match['matched']:
+            extracted['contract_no'] = contract_match['contract_no']
+            extracted['contract_id'] = contract_match['contract_id']
+            extracted['contract_unit_price'] = contract_match['unit_price']
+            extracted['smelter_company'] = contract_match['smelter_company']
+            result['suggested_data'] = {
+                'contract_no': contract_match['contract_no'],
+                'target_factory_name': contract_match['smelter_company'],
+                'product_name': extracted.get('product_name'),
+                'unit_price': contract_match['unit_price'],
+            }
+        
+        return result
 
 _delivery_service = None
-
 
 def get_delivery_service():
     global _delivery_service
