@@ -2,14 +2,17 @@
 销售台账/报货订单路由
 """
 import os
-from typing import List, Optional
+import re
+from typing import List, Dict,Optional, Any
 import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 from app.services.delivery_service import DeliveryService, get_delivery_service
 from core.auth import get_current_user
+from core.database import get_conn
 
 router = APIRouter(prefix="/deliveries", tags=["销售台账/报货订单"])
 logger = logging.getLogger(__name__)
@@ -111,6 +114,40 @@ class BatchDeliveryOrderResponse(BaseModel):
     success_count: int = Field(..., description="成功数量")
     failed_count: int = Field(..., description="失败数量")
     results: List[BatchUploadResult] = Field(..., description="详细结果列表")
+
+class TextExtractRequest(BaseModel):
+    """文本提取请求"""
+    text: str = Field(..., description="待提取的非结构化文本")
+    report_date: Optional[str] = Field(None, description="报单日期 (ISO格式 YYYY-MM-DD)")
+
+class ContractMatchInfo(BaseModel):
+    """合同匹配信息"""
+    matched: bool = Field(..., description="是否匹配到合同")
+    match_type: str = Field(..., description="匹配类型: exact/fuzzy/none/error")
+    reason: Optional[str] = Field(None, description="未匹配原因或匹配说明")
+    contract_no: Optional[str] = Field(None, description="合同编号")
+    contract_id: Optional[int] = Field(None, description="合同ID")
+    unit_price: Optional[float] = Field(None, description="合同单价")
+    smelter_company: Optional[str] = Field(None, description="冶炼厂/工厂名称")
+    matched_product: Optional[str] = Field(None, description="匹配到的品种")
+
+
+class ValidationResult(BaseModel):
+    """字段验证结果"""
+    is_valid: bool = Field(..., description="验证是否通过")
+    missing_fields: List[str] = Field(default_factory=list, description="缺失的必填字段列表")
+    data: Dict[str, Any] = Field(default_factory=dict, description="验证后的数据")
+
+
+class TextExtractResponse(BaseModel):
+    """文本提取响应"""
+    success: bool = Field(..., description="操作是否成功")
+    message: str = Field(..., description="提示信息")
+    extracted: Dict[str, Any] = Field(default_factory=dict, description="提取的字段数据")
+    validation: ValidationResult = Field(..., description="验证结果")
+    contract_match: ContractMatchInfo = Field(..., description="合同匹配信息")
+    ready_to_create: bool = Field(..., description="是否可直接创建报单")
+    suggested_data: Optional[Dict[str, Any]] = Field(None, description="建议的报单数据")
 # ============ 路由 ============
 
 @router.post("/", summary="新增报货订单", response_model=dict)
