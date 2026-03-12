@@ -2084,17 +2084,17 @@ class PaymentService:
                 # 构建WHERE条件
                 where_clauses = ["1=1"]
                 params = []
-                
+
                 if contract_no:
                     where_clauses.append("c.contract_no LIKE %s")
                     params.append(f"%{contract_no}%")
-                
+
                 if smelter_name:
                     where_clauses.append("c.smelter_company LIKE %s")
                     params.append(f"%{smelter_name}%")
-                
+
                 where_sql = " AND ".join(where_clauses)
-                
+
                 # 查询总数
                 count_sql = f"""
                     SELECT COUNT(*) as total 
@@ -2103,18 +2103,15 @@ class PaymentService:
                 """
                 cur.execute(count_sql, tuple(params))
                 total = cur.fetchone()["total"]
-                
+
                 # 查询合同发运进度
                 offset = (page - 1) * size
                 query_sql = f"""
                     SELECT 
                         c.contract_no,
                         c.smelter_company as smelter_name,
-                        (
-                            SELECT COALESCE(SUM(d.quantity), 0)
-                            FROM pd_deliveries d
-                            WHERE d.contract_no = c.contract_no
-                        ) as planned_total_weight,
+                        c.total_quantity as planned_total_weight,   -- 直接从合同表获取总重量
+                        c.truck_count as total_vehicles,            -- 直接从合同表获取总车数
                         (
                             SELECT COUNT(*)
                             FROM pd_weighbills wb
@@ -2138,32 +2135,35 @@ class PaymentService:
                     ORDER BY c.created_at DESC
                     LIMIT %s OFFSET %s
                 """
-                
+
                 cur.execute(query_sql, tuple(params + [size, offset]))
                 rows = cur.fetchall()
-                
+
                 items = []
                 for row in rows:
                     item = dict(row)
-                    planned_weight = float(item.get('planned_total_weight') or 0)
-                    shipped_weight = float(item.get('shipped_weight') or 0)
+                    # 已送达数据
                     shipped_vehicles = int(item.get('shipped_vehicles') or 0)
+                    shipped_weight = float(item.get('shipped_weight') or 0)
+                    # 合同原始数据
+                    total_vehicles = int(item.get('total_vehicles') or 0)
+                    planned_weight = float(item.get('planned_total_weight') or 0)
+
+                    # 计算剩余
+                    remaining_vehicles = total_vehicles - shipped_vehicles
                     remaining_weight = planned_weight - shipped_weight
-                    
-                    # 估算剩余车数
-                    if shipped_vehicles > 0 and shipped_weight > 0:
-                        avg_weight_per_vehicle = shipped_weight / shipped_vehicles
-                        remaining_vehicles = int(remaining_weight / avg_weight_per_vehicle) if avg_weight_per_vehicle > 0 else 0
-                    else:
-                        remaining_vehicles = int(remaining_weight / 30) if remaining_weight > 0 else 0
-                    
-                    total_vehicles = shipped_vehicles + remaining_vehicles
-                    
+
+                    # 防止负数（如超发）
+                    if remaining_vehicles < 0:
+                        remaining_vehicles = 0
+                    if remaining_weight < 0:
+                        remaining_weight = 0.0
+
                     items.append({
                         "contract_no": item["contract_no"],
                         "smelter_name": item["smelter_name"],
-                        "total_vehicles": total_vehicles,
-                        "planned_total_weight": round(planned_weight, 2),
+                        "total_vehicles": total_vehicles,  # 合同总车数
+                        "planned_total_weight": round(planned_weight, 2),  # 合同总重量
                         "shipped_vehicles": shipped_vehicles,
                         "remaining_vehicles": remaining_vehicles,
                         "shipped_weight": round(shipped_weight, 2),
@@ -2171,7 +2171,7 @@ class PaymentService:
                         "last_ship_date": str(item["last_ship_date"]) if item.get("last_ship_date") else None,
                         "progress_rate": round(shipped_weight / planned_weight * 100, 2) if planned_weight > 0 else 0
                     })
-                
+
                 return {
                     "total": total,
                     "page": page,
