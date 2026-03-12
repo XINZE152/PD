@@ -35,7 +35,7 @@ class CustomerUpdateRequest(BaseModel):
 class WarehousePayeeCreateRequest(BaseModel):
     """库房收款员新增请求"""
 
-    warehouse_name: str = Field(..., min_length=1, max_length=100)
+    # warehouse_name 字段已移除，后端自动处理
     payee_name: str = Field(..., min_length=1, max_length=100)
     payee_account: Optional[str] = Field(None, max_length=100)
     payee_bank_name: Optional[str] = Field(None, max_length=100)
@@ -45,7 +45,7 @@ class WarehousePayeeCreateRequest(BaseModel):
 class WarehousePayeeUpdateRequest(BaseModel):
     """库房收款员编辑请求"""
 
-    warehouse_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    # warehouse_name 字段已移除，后端自动处理
     payee_name: Optional[str] = Field(None, min_length=1, max_length=100)
     payee_account: Optional[str] = Field(None, max_length=100)
     payee_bank_name: Optional[str] = Field(None, max_length=100)
