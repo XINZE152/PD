@@ -1,6 +1,7 @@
 """
 磅单结余管理 + 支付回单处理服务（优化版）
 """
+import json
 import logging
 import tempfile
 from decimal import Decimal, ROUND_HALF_UP
@@ -1243,12 +1244,11 @@ class BalanceService:
             return {"success": False, "error": str(e), "data": [], "total": 0}
 
     def get_payment_receipt(self, receipt_id: int) -> Optional[Dict]:
-        """获取支付回单详情（增加新字段）"""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT id, receipt_no, receipt_image, payment_date, payment_time,
+                        SELECT id, receipt_no, receipt_image, receipt_images, payment_date, payment_time,
                                payer_name, payer_account, payee_name, payee_account,
                                amount, fee, total_amount, bank_name, payee_bank_name, remark,
                                ocr_status, is_manual_corrected, ocr_raw_data,
@@ -1256,19 +1256,25 @@ class BalanceService:
                         FROM pd_payment_receipts 
                         WHERE id = %s
                     """, (receipt_id,))
-
                     row = cur.fetchone()
                     if not row:
                         return None
 
-                    # 映射字段
-                    columns = ['id', 'receipt_no', 'receipt_image', 'payment_date', 'payment_time',
+                    columns = ['id', 'receipt_no', 'receipt_image', 'receipt_images', 'payment_date', 'payment_time',
                                'payer_name', 'payer_account', 'payee_name', 'payee_account',
                                'amount', 'fee', 'total_amount', 'bank_name', 'payee_bank_name', 'remark',
                                'ocr_status', 'is_manual_corrected', 'ocr_raw_data',
                                'created_at', 'updated_at']
-
                     data = dict(zip(columns, row))
+
+                    # 解析 JSON 字符串为列表
+                    if data.get('receipt_images'):
+                        try:
+                            data['receipt_images'] = json.loads(data['receipt_images'])
+                        except (json.JSONDecodeError, TypeError):
+                            data['receipt_images'] = []
+                    else:
+                        data['receipt_images'] = []
 
                     # 转换时间
                     for key in ['payment_date', 'payment_time', 'created_at', 'updated_at']:

@@ -630,19 +630,35 @@ async def verify_payment(
 )
 async def get_payment_receipt_image(
         receipt_id: int,
+        index: int = Query(0, ge=0, description="图片索引，从0开始"),
         service: BalanceService = Depends(get_balance_service)
 ):
     """
     查看支付回单图片
+    - 支持多张图片，通过 index 参数选择具体哪一张（默认第一张）
     """
     receipt = service.get_payment_receipt(receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="支付回单不存在")
 
-    image_path = receipt.get('receipt_image')
-    if not image_path:
+    # 优先使用多图片列表
+    image_paths = receipt.get('receipt_images', [])
+    if not image_paths:
+        # 兼容旧数据（只有单张图片）
+        single_path = receipt.get('receipt_image')
+        if single_path:
+            image_paths = [single_path]
+
+    if not image_paths:
         raise HTTPException(status_code=404, detail="该回单没有图片")
 
+    if index >= len(image_paths):
+        raise HTTPException(
+            status_code=404,
+            detail=f"图片索引 {index} 超出范围，共有 {len(image_paths)} 张"
+        )
+
+    image_path = image_paths[index]
     full_path = _resolve_payment_receipt_image_path(image_path)
     if not full_path or not full_path.exists():
         raise HTTPException(status_code=404, detail="图片文件不存在")
@@ -652,15 +668,13 @@ async def get_payment_receipt_image(
     if not mime_type:
         mime_type = "image/jpeg"
 
-    # 对中文文件名进行 RFC 5987/RFC 6266 编码，避免 latin-1 编码错误
+    # 对中文文件名进行 RFC 5987/RFC 6266 编码
     from urllib.parse import quote
     filename = full_path.name
-    # ASCII 字符直接用，非 ASCII 字符用 RFC 5987 编码
     try:
         filename.encode('ascii')
         disposition = f'inline; filename="{filename}"'
     except UnicodeEncodeError:
-        # 包含中文，使用 RFC 5987 编码
         encoded_filename = quote(filename, safe='')
         disposition = f"inline; filename*=UTF-8''{encoded_filename}"
 
