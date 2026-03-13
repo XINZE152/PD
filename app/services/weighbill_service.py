@@ -1174,16 +1174,27 @@ class WeighbillService:
                         weighbill_where.append("w.id = %s")
                         weighbill_params.append(exact_weighbill_id)
 
-                    # === 新增状态筛选 ===
+                    # === 新增状态筛选（修复 NULL 问题） ===
                     if exact_schedule_status is not None:
-                        weighbill_where.append("b.schedule_status = %s")
-                        weighbill_params.append(exact_schedule_status)
+                        if exact_schedule_status == 0:
+                            weighbill_where.append("(b.schedule_status = 0 OR b.schedule_status IS NULL)")
+                        else:
+                            weighbill_where.append("b.schedule_status = %s")
+                            weighbill_params.append(exact_schedule_status)
+
                     if exact_payout_status is not None:
-                        weighbill_where.append("b.payout_status = %s")
-                        weighbill_params.append(exact_payout_status)
+                        if exact_payout_status == 0:
+                            weighbill_where.append("(b.payout_status = 0 OR b.payout_status IS NULL)")
+                        else:
+                            weighbill_where.append("b.payout_status = %s")
+                            weighbill_params.append(exact_payout_status)
+
                     if exact_collection_status is not None:
-                        weighbill_where.append("pd.collection_status = %s")
-                        weighbill_params.append(exact_collection_status)
+                        if exact_collection_status == 0:
+                            weighbill_where.append("(pd.collection_status = 0 OR pd.collection_status IS NULL)")
+                        else:
+                            weighbill_where.append("pd.collection_status = %s")
+                            weighbill_params.append(exact_collection_status)
 
                     weighbill_sql = " AND ".join(weighbill_where)
 
