@@ -887,3 +887,35 @@ async def batch_upload_delivery_orders(
     except Exception as e:
         logger.exception("批量上传联单异常")
         raise HTTPException(status_code=500, detail=f"批量上传失败: {str(e)}")
+
+
+@router.post(
+    "/{delivery_id}/upload-order-pdf",
+    summary="上传联单PDF文件",          # 中文标题
+    description="上传联单的PDF版本，支持PDF格式。如果已上传联单，则返回错误。"
+)
+async def upload_delivery_pdf(
+    delivery_id: int,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    delivery_service: DeliveryService = Depends(get_delivery_service)
+):
+    """上传联单 PDF 文件"""
+    # 验证文件类型
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="只支持 PDF 文件")
+
+    # 读取文件内容
+    contents = await file.read()
+
+    # 调用服务方法
+    result = delivery_service.upload_delivery_pdf(
+        delivery_id=delivery_id,
+        pdf_bytes=contents,
+        uploaded_by=current_user.get("name")  # 或根据业务传递身份
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
