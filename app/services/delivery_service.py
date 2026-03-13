@@ -1634,3 +1634,88 @@ def get_delivery_service():
     if _delivery_service is None:
         _delivery_service = DeliveryService()
     return _delivery_service
+
+
+def upload_delivery_pdf(self, delivery_id: int, pdf_bytes: bytes, uploaded_by: str = None) -> Dict[str, Any]:
+    """上传联单 PDF 文件（只处理文件保存和状态更新，不修改其他字段）"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 查询原报单
+                cur.execute(
+                    "SELECT has_delivery_order, delivery_order_image, upload_status, vehicle_no FROM pd_deliveries WHERE id = %s",
+                    (delivery_id,)
+                )
+                old = cur.fetchone()
+                if not old:
+                    return {"success": False, "error": f"报单ID {delivery_id} 不存在"}
+
+                # 统一转换为字典
+                if not isinstance(old, dict):
+                    old = {
+                        'has_delivery_order': old[0],
+                        'delivery_order_image': old[1],
+                        'upload_status': old[2],
+                        'vehicle_no': old[3]
+                    }
+
+                # 检查是否已上传（可选：允许覆盖？根据业务决定）
+                if old.get('upload_status') == '已上传':
+                    return {"success": False, "error": "联单已上传，如需替换请使用修改接口"}
+
+                # 验证 PDF 格式（简单检查文件头）
+                if not pdf_bytes.startswith(b'%PDF'):
+                    return {"success": False, "error": "文件不是有效的 PDF 格式"}
+
+                # 生成文件名
+                safe_name = re.sub(r'[^\w\-]', '_', str(old.get('vehicle_no', delivery_id)))
+                filename = f"delivery_{safe_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.pdf"
+                file_path = UPLOAD_DIR / filename
+
+                # 保存文件
+                with open(file_path, "wb") as f:
+                    f.write(pdf_bytes)
+
+                # 计算联单费（根据是否有联单，这里假设有联单则费用为0）
+                has_order = old.get('has_delivery_order', '有')
+                service_fee = self._calculate_service_fee(has_order)
+
+                # 确定来源类型
+                source_type = self._determine_source_type(has_order, uploaded_by)
+
+                # 更新数据库（只更新文件相关字段）
+                cur.execute("""
+                    UPDATE pd_deliveries 
+                    SET delivery_order_image = %s,
+                        upload_status = '已上传',
+                        source_type = %s,
+                        service_fee = %s,
+                        uploaded_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = %s
+                """, (str(file_path), source_type, service_fee, delivery_id))
+
+                conn.commit()
+
+                # 删除旧文件（如果有）
+                old_image = old.get('delivery_order_image')
+                if old_image and os.path.exists(old_image):
+                    try:
+                        os.remove(old_image)
+                    except Exception as e:
+                        logger.warning(f"删除旧文件失败: {e}")
+
+                return {
+                    "success": True,
+                    "message": "PDF 联单上传成功",
+                    "data": {
+                        "delivery_id": delivery_id,
+                        "image_path": str(file_path),
+                        "upload_status": "已上传",
+                        "service_fee": float(service_fee),
+                        "source_type": source_type
+                    }
+                }
+    except Exception as e:
+        logger.error(f"上传 PDF 失败: {e}")
+        return {"success": False, "error": str(e)}
