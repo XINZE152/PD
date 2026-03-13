@@ -256,7 +256,7 @@ TABLE_STATEMENTS = [
 	"""
 	CREATE TABLE IF NOT EXISTS pd_payees (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-		warehouse_id BIGINT NOT NULL COMMENT '所属库房ID（关联pd_warehouses.id）',
+		warehouse_id BIGINT DEFAULT NULL COMMENT '所属库房ID（关联pd_warehouses.id），可为空',
 		payee_name VARCHAR(64) NOT NULL COMMENT '收款人姓名',
 		payee_account VARCHAR(32) NOT NULL COMMENT '收款账号',
 		payee_bank_name VARCHAR(64) COMMENT '收款银行名称',
@@ -266,7 +266,7 @@ TABLE_STATEMENTS = [
 		INDEX idx_warehouse_id (warehouse_id),
 		INDEX idx_payee_name (payee_name),
 		INDEX idx_is_active (is_active),
-		FOREIGN KEY (warehouse_id) REFERENCES pd_warehouses(id) ON DELETE CASCADE
+		FOREIGN KEY (warehouse_id) REFERENCES pd_warehouses(id) ON DELETE SET NULL
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收款人表';
 	""",
 	# ========== 新增合同管理表 ==========
