@@ -615,8 +615,7 @@ class DeliveryService:
                 data['voucher_images'] = voucher_paths if voucher_paths else None
                 # 联单图片字段置空
                 data['delivery_order_image'] = None
-                # 对于无联单，凭证已上传即认为 upload_status 为已上传
-                data['upload_status'] = '已上传' if voucher_paths else '待上传'
+                data['upload_status'] = '待上传'
 
             # ---------- 原有逻辑：处理操作人信息、计算联单费等 ----------
             uploaded_by = data.get('uploaded_by')
@@ -916,7 +915,7 @@ class DeliveryService:
                                 temp_new_files.append(path)
                                 new_paths.append(path)
                             new_vouchers = new_paths
-                            new_upload_status = '已上传' if new_paths else '待上传'
+                            new_upload_status = '待上传'
                         # 如果没有提供 voucher_images，则保持原有凭证列表（不修改）
 
                     # 准备更新数据
@@ -1024,7 +1023,7 @@ class DeliveryService:
 
                     # 更新数据库
                     cur.execute(
-                        "UPDATE pd_deliveries SET voucher_images = %s, upload_status = '已上传' WHERE id = %s",
+                        "UPDATE pd_deliveries SET voucher_images = %s WHERE id = %s",
                         (json.dumps(current_vouchers), delivery_id)
                     )
                     conn.commit()
