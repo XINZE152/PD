@@ -9,7 +9,9 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Q
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from datetime import datetime
-
+import mimetypes
+from urllib.parse import quote
+from fastapi import Query
 from app.services.delivery_service import DeliveryService, get_delivery_service
 from core.auth import get_current_user
 from core.database import get_conn
@@ -294,6 +296,80 @@ async def list_voucher_images(
     paths = service.get_voucher_images(delivery_id)
     return {"voucher_images": paths}
 
+
+@router.get(
+    "/{delivery_id}/vouchers/image",
+    summary="预览凭证图片",
+    responses={
+        200: {
+            "content": {
+                "image/jpeg": {},
+                "image/png": {},
+                "image/bmp": {},
+                "image/webp": {},
+                "image/gif": {},
+            },
+            "description": "凭证图片",
+        }
+    },
+)
+async def view_voucher_image(
+    delivery_id: int,
+    index: int = Query(0, ge=0, description="图片索引，从0开始（默认第一张）"),
+    service: DeliveryService = Depends(get_delivery_service)
+):
+    """
+    按索引预览指定订单的凭证图片（支持多张图片）
+    """
+    try:
+        # 获取订单详情（包含 voucher_images 列表）
+        delivery = service.get_delivery(delivery_id)
+        if not delivery:
+            raise HTTPException(status_code=404, detail="订单不存在")
+
+        # 获取凭证图片列表
+        voucher_paths = delivery.get("voucher_images", [])
+        if not voucher_paths:
+            raise HTTPException(status_code=404, detail="该订单没有凭证图片")
+
+        # 校验索引范围
+        if index < 0 or index >= len(voucher_paths):
+            raise HTTPException(
+                status_code=404,
+                detail=f"图片索引 {index} 超出范围，共有 {len(voucher_paths)} 张"
+            )
+
+        image_path = voucher_paths[index]
+        if not image_path or not os.path.exists(image_path):
+            raise HTTPException(status_code=404, detail="图片文件不存在")
+
+        # 自动识别 MIME 类型
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if not mime_type:
+            mime_type = "image/jpeg"  # 默认
+
+        # 对文件名进行 RFC 5987 编码（支持中文）
+        filename = os.path.basename(image_path)
+        try:
+            # 尝试 ASCII 编码
+            filename.encode('ascii')
+            disposition = f'inline; filename="{filename}"'
+        except UnicodeEncodeError:
+            # 非 ASCII 文件名，使用 UTF-8 编码
+            encoded_filename = quote(filename, safe='')
+            disposition = f"inline; filename*=UTF-8''{encoded_filename}"
+
+        return FileResponse(
+            path=image_path,
+            media_type=mime_type,
+            headers={"Content-Disposition": disposition}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"预览凭证图片失败: {e}")
+        raise HTTPException(status_code=500, detail=f"预览失败: {str(e)}")
 @router.put("/{delivery_id}/vouchers", summary="整体替换凭证图片")
 async def replace_voucher_images(
     delivery_id: int,
