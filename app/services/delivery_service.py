@@ -252,7 +252,7 @@ class DeliveryService:
                     # Step 1: 品种匹配（只匹配unit_price>0的有效品种）
                     cur.execute("""
                         SELECT c.contract_no, p.unit_price, c.total_quantity,
-                               CEIL(c.total_quantity / 35) as contract_trucks
+                               FLOOR(c.total_quantity / 35) as contract_trucks
                         FROM pd_contracts c
                         JOIN pd_contract_products p ON p.contract_id = c.id
                         WHERE c.smelter_company = %s
