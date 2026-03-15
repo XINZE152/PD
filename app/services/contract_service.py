@@ -518,6 +518,25 @@ class ContractService:
     def create_contract(self, data: Dict, products: List[Dict]) -> Dict[str, Any]:
         """创建合同（包含品种明细）"""
         try:
+            # 检查合同编号是否已存在（包括已删除的）
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    # 严格检查合同编号唯一性
+                    cur.execute("""
+                        SELECT id, status FROM pd_contracts WHERE contract_no = %s
+                    """, (data.get("contract_no"),))
+                    existing = cur.fetchone()
+                    
+                    if existing:
+                        existing_id = existing[0] if not isinstance(existing, dict) else existing["id"]
+                        existing_status = existing[1] if not isinstance(existing, dict) else existing["status"]
+                        
+                        return {
+                            "success": False,
+                            "error": f"合同编号 {data['contract_no']} 已存在（ID: {existing_id}, 状态: {existing_status}）。请使用新的合同编号，或修改现有合同。",
+                            "existing_id": existing_id,
+                            "existing_status": existing_status
+                        }
             if "total_quantity" in data and "truck_count" not in data:
                 data["truck_count"] = self._calculate_truck_count(data.get("total_quantity"))
             if data.get("contract_date"):
@@ -833,13 +852,61 @@ class ContractService:
             return {"success": False, "error": str(e), "data": [], "total": 0}
 
     def delete_contract(self, contract_id: int) -> Dict[str, Any]:
-        """删除合同"""
+        """删除合同（带关联检查）"""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
+                    # 获取合同编号
+                    cur.execute("SELECT contract_no FROM pd_contracts WHERE id = %s", (contract_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        return {"success": False, "error": f"合同ID {contract_id} 不存在"}
+                    
+                    contract_no = row[0] if not isinstance(row, dict) else row["contract_no"]
+                    
+                    # 检查是否有关联的报单
+                    cur.execute("""
+                        SELECT COUNT(*) FROM pd_deliveries 
+                        WHERE contract_no = %s OR contract_id = %s
+                    """, (contract_no, contract_id))
+                    delivery_count = cur.fetchone()[0]
+                    
+                    if delivery_count > 0:
+                        return {
+                            "success": False, 
+                            "error": f"该合同有关联的 {delivery_count} 个报单，无法删除。请先删除关联报单或解除关联。"
+                        }
+                    
+                    # 检查是否有关联的磅单
+                    cur.execute("""
+                        SELECT COUNT(*) FROM pd_weighbills 
+                        WHERE contract_no = %s OR contract_id = %s
+                    """, (contract_no, contract_id))
+                    weighbill_count = cur.fetchone()[0]
+                    
+                    if weighbill_count > 0:
+                        return {
+                            "success": False,
+                            "error": f"该合同有关联的 {weighbill_count} 个磅单，无法删除。请先删除关联磅单或解除关联。"
+                        }
+                    
+                    # 删除合同品种明细
+                    cur.execute("DELETE FROM pd_contract_products WHERE contract_id = %s", (contract_id,))
+                    
+                    # 删除合同
                     cur.execute("DELETE FROM pd_contracts WHERE id = %s", (contract_id,))
-                    return {"success": True, "message": "删除成功"}
+                    
+                    return {
+                        "success": True, 
+                        "message": "删除成功",
+                        "data": {
+                            "deleted_contract_id": contract_id,
+                            "deleted_products": cur.rowcount
+                        }
+                    }
+                    
         except Exception as e:
+            logger.error(f"删除合同失败: {e}")
             return {"success": False, "error": str(e)}
 
     def export_contracts(self, contract_ids: List[int] = None) -> List[Dict]:

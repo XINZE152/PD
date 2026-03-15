@@ -217,10 +217,14 @@ class DeliveryService:
             return 1
         return int((quantity / STANDARD_TRUCK_CAPACITY).to_integral_value(rounding=ROUND_FLOOR))
 
-    def _match_contract_with_truck_check(self, factory_name: str,
-                                          product_name: str,
-                                          planned_trucks: int,
-                                          report_date: str) -> Dict:
+    def _match_contract_with_truck_check(
+        self, 
+        factory_name: str,
+        product_name: str,
+        planned_trucks: int,
+        report_date: str,
+        exact_contract_no: Optional[str] = None  # 新增：精确匹配合同编号
+    ) -> Dict:
         """
         匹配合同（向后匹配策略）：
         1. 先按品种匹配（只匹配unit_price>0的有效品种）
@@ -248,7 +252,66 @@ class DeliveryService:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     effective_date = report_date or datetime.today().date().isoformat()
-
+                # ========== 新增：优先精确匹配合同编号 ==========
+                    if exact_contract_no:
+                        cur.execute("""
+                            SELECT c.id, c.contract_no, p.unit_price, c.total_quantity,
+                                CEIL(c.total_quantity / 35) as contract_trucks
+                            FROM pd_contracts c
+                            JOIN pd_contract_products p ON p.contract_id = c.id
+                            WHERE c.contract_no = %s
+                            AND c.status = '生效中'
+                            AND p.product_name = %s
+                            AND p.unit_price > 0
+                            LIMIT 1
+                        """, (exact_contract_no, product_name))
+                        
+                        exact_match = cur.fetchone()
+                        if exact_match:
+                            # 转换为字典
+                            if isinstance(exact_match, dict):
+                                match = exact_match
+                            else:
+                                columns = [desc[0] for desc in cur.description]
+                                match = dict(zip(columns, exact_match))
+                            
+                            contract_no = match["contract_no"]
+                            unit_price = match["unit_price"]
+                            contract_trucks = int(match.get("contract_trucks") or 0)
+                            
+                            # 统计已用车数
+                            cur.execute("""
+                                SELECT COALESCE(SUM(planned_trucks), 0) as used_trucks
+                                FROM pd_deliveries
+                                WHERE contract_no = %s AND contract_id = %s
+                                AND status IN ('待确认', '已确认', '已完成')
+                            """, (contract_no, match["id"]))
+                            
+                            used_trucks = int(cur.fetchone()['used_trucks'] or 0)
+                            remaining = contract_trucks - used_trucks
+                            
+                            if planned_trucks <= remaining:
+                                return {
+                                    'matched': True,
+                                    'contract_no': contract_no,
+                                    'contract_id': match["id"],  # 返回合同ID
+                                    'unit_price': float(unit_price) if unit_price else None,
+                                    'is_last_delivery': (used_trucks + planned_trucks) >= contract_trucks,
+                                    'contract_total_trucks': contract_trucks,
+                                    'contract_used_trucks': used_trucks,
+                                    'contract_remaining_trucks': remaining - planned_trucks,
+                                    'this_delivery_trucks': planned_trucks,
+                                    'match_type': 'exact_no',  # 精确匹配
+                                    'reason': None
+                                }
+                            else:
+                                return {
+                                    'matched': False,
+                                    'reason': f'精确匹配到合同 {contract_no}，但车数不足（需{planned_trucks}车，仅余{remaining}车）',
+                                    'contract_no': None,
+                                    'unit_price': None,
+                                    'skipped_contracts': []
+                                }
                     # Step 1: 品种匹配（只匹配unit_price>0的有效品种）
                     cur.execute("""
                         SELECT c.contract_no, p.unit_price, c.total_quantity,
@@ -661,24 +724,30 @@ class DeliveryService:
 
             # 合同匹配
             target_factory = data.get('target_factory_name')
+            exact_contract_no = data.get('contract_no')  # 获取用户指定的合同编号
+            
             match_result = self._match_contract_with_truck_check(
                 factory_name=target_factory,
                 product_name=products[0],
                 planned_trucks=planned_trucks,
-                report_date=data.get('report_date')
+                report_date=data.get('report_date'),
+                exact_contract_no=exact_contract_no  # 传入精确匹配
             )
+            
             if not match_result['matched']:
                 return {
                     "success": False,
                     "error": match_result['reason'],
-                    "suggest": match_result.get('suggest', '请拆分报单数量，或创建新车数充足的新合同')
+                    "suggest": match_result.get('suggest', '请检查合同编号是否正确，或拆分报单数量')
                 }
 
             contract_no = match_result['contract_no']
+            contract_id = match_result.get('contract_id')
             unit_price = match_result['unit_price']
             is_last_delivery = match_result['is_last_delivery']
             total_amount = float(Decimal(str(unit_price)) * quantity) if (unit_price and quantity) else None
             data['contract_no'] = contract_no
+            data['contract_id'] = contract_id
             data['contract_unit_price'] = unit_price
             data['total_amount'] = total_amount
 
