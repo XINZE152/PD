@@ -1,6 +1,7 @@
 """
 销售台账/报货订单路由
 """
+import json
 import os
 import re
 from typing import List, Dict,Optional, Any
@@ -10,6 +11,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from datetime import datetime
 import mimetypes
+from fastapi import Request, Response
+from fastapi import Body
 from urllib.parse import quote
 from fastapi import Query
 from app.services.delivery_service import DeliveryService, get_delivery_service
@@ -121,6 +124,15 @@ class TextExtractRequest(BaseModel):
     """文本提取请求"""
     text: str = Field(..., description="待提取的非结构化文本")
     report_date: Optional[str] = Field(None, description="报单日期 (ISO格式 YYYY-MM-DD)")
+    
+    class Config:
+        # 允许任意字符串，包括包含换行符的
+        json_schema_extra = {
+            "example": {
+                "text": "金利 自带联单 车号：冀A013TJ",
+                "report_date": "2024-01-01"
+            }
+        }
 
 class ContractMatchInfo(BaseModel):
     """合同匹配信息"""
@@ -148,9 +160,75 @@ class TextExtractResponse(BaseModel):
     extracted: Dict[str, Any] = Field(default_factory=dict, description="提取的字段数据")
     validation: ValidationResult = Field(..., description="验证结果")
     contract_match: ContractMatchInfo = Field(..., description="合同匹配信息")
+    contract_no: Optional[str] = Field(None, description="匹配到的合同编号（若有）")
+    contract_id: Optional[int] = Field(None, description="匹配到的合同ID（若有）")
     ready_to_create: bool = Field(..., description="是否可直接创建报单")
     suggested_data: Optional[Dict[str, Any]] = Field(None, description="建议的报单数据")
 # ============ 路由 ============
+
+@router.post("/parse", summary="解析报单文本", response_model=TextExtractResponse)
+async def parse_delivery_text(
+    request: Request,  # 使用原始 Request 绕过 Pydantic 验证
+    service: DeliveryService = Depends(get_delivery_service)
+):
+    """解析上传的非结构化报单文本（支持包含换行符的 JSON）"""
+    try:
+        # 读取原始字节
+        body_bytes = await request.body()
+        body_str = body_bytes.decode('utf-8', errors='ignore')
+        
+        # 自定义 JSON 解析：先清理控制字符，再解析
+        try:
+            # 方法1：尝试标准解析（处理已转义的 \n）
+            data = json.loads(body_str)
+        except json.JSONDecodeError as e:
+            # 方法2：如果失败，尝试清理原始控制字符后再解析
+            # 将原始换行符、回车符替换为 \n 转义序列
+            cleaned_json = body_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            try:
+                data = json.loads(cleaned_json)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail=f"JSON解析错误: {str(e)}")
+        
+        text = data.get('text', '')
+        report_date = data.get('report_date')
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="text 字段不能为空")
+        
+        # 清理文本内容（将转义的换行符等替换为空格）
+        # 注意：此时 text 中的 \n 已经是字符串，不是控制字符
+        clean_text = text.replace('\\n', ' ').replace('\\r', ' ').replace('\\t', ' ')
+        # 移除其他不可打印控制字符（以防万一）
+        clean_text = ''.join(char for char in clean_text if ord(char) >= 32 or char in '\n\r\t')
+        # 合并多余空格
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        
+        result = service.extract_with_contract(clean_text, report_date=report_date)
+        
+        return TextExtractResponse(
+            success=result.get('success', True),
+            message=result.get('reason', '解析完成'),
+            extracted=result.get('extracted', {}),
+            validation=result.get('validation', {
+                'is_valid': False,
+                'missing_fields': [],
+                'data': {}
+            }),
+            contract_match=result.get('contract_match', {
+                'matched': False,
+                'match_type': 'none'
+            }),
+            contract_no=(result.get('contract_match') or {}).get('contract_no') or result.get('extracted', {}).get('contract_no'),
+            contract_id=(result.get('contract_match') or {}).get('contract_id') or result.get('extracted', {}).get('contract_id'),
+            ready_to_create=result.get('ready_to_create', False),
+            suggested_data=result.get('suggested_data')
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"解析报单文本失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/", summary="新增报货订单", response_model=dict)
 async def create_delivery(

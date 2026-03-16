@@ -670,7 +670,8 @@ class WeighbillService:
                     final_weigh_date = payload.get("weigh_date") if payload.get("weigh_date") is not None else (existing.get("weigh_date") if existing else None)
                     final_delivery_time = payload.get("delivery_time") if payload.get("delivery_time") is not None else (existing.get("delivery_time") if existing else None)
                     final_weigh_ticket_no = payload.get("weigh_ticket_no") if payload.get("weigh_ticket_no") is not None else (existing.get("weigh_ticket_no") if existing else None)
-                    final_contract_no = payload.get("contract_no") if payload.get("contract_no") is not None else (existing.get("contract_no") if existing else None)
+                    final_contract_no = payload.get("contract_no") or existing.get("contract_no") if existing else None
+                    final_contract_id = None
                     final_vehicle_no = payload.get("vehicle_no") if payload.get("vehicle_no") is not None else (existing.get("vehicle_no") if existing else None)
                     final_gross_weight = payload.get("gross_weight") if payload.get("gross_weight") is not None else (existing.get("gross_weight") if existing else None)
                     final_tare_weight = payload.get("tare_weight") if payload.get("tare_weight") is not None else (existing.get("tare_weight") if existing else None)
@@ -687,6 +688,14 @@ class WeighbillService:
                             payload,
                             current_user,
                         )
+                    
+                    if final_contract_no:
+                        with get_conn() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT id FROM pd_contracts WHERE contract_no = %s", (final_contract_no,))
+                                row = cur.fetchone()
+                                if row:
+                                    final_contract_id = row[0] if not isinstance(row, dict) else row["id"]
 
                     net_weight_decimal = Decimal(str(final_net_weight)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
                     gross_weight_decimal = None if final_gross_weight in (None, "") else Decimal(str(final_gross_weight)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
@@ -708,6 +717,7 @@ class WeighbillService:
                             final_delivery_time,
                             final_weigh_ticket_no,
                             final_contract_no,
+                            final_contract_id,
                             final_vehicle_no,
                             gross_weight_decimal,
                             tare_weight_decimal,
@@ -729,6 +739,7 @@ class WeighbillService:
                                 delivery_time = %s,
                                 weigh_ticket_no = %s,
                                 contract_no = %s,
+                                contract_id = %s,
                                 vehicle_no = %s,
                                 gross_weight = %s,
                                 tare_weight = %s,
@@ -755,7 +766,7 @@ class WeighbillService:
                         action = 'updated'
                     else:
                         insert_fields = [
-                            "weigh_date", "delivery_time", "weigh_ticket_no", "contract_no",
+                            "weigh_date", "delivery_time", "weigh_ticket_no", "contract_no","contract_id",
                             "delivery_id", "vehicle_no", "product_name", "gross_weight",
                             "tare_weight", "net_weight", "unit_price", "total_amount",
                             "weighbill_image", "upload_status", "ocr_status",
@@ -766,6 +777,7 @@ class WeighbillService:
                             final_delivery_time,
                             final_weigh_ticket_no,
                             final_contract_no,
+                            final_contract_id,
                             delivery_id,
                             final_vehicle_no,
                             normalized_product,

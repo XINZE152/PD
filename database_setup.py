@@ -176,6 +176,7 @@ TABLE_STATEMENTS = [
 		payee VARCHAR(64) COMMENT '收款人',
 		service_fee DECIMAL(14, 2) DEFAULT 0 COMMENT '服务费',
 		contract_no VARCHAR(64) COMMENT '关联合同编号',
+		contract_id BIGINT COMMENT '关联合同ID（外键，用于数据完整性）',
 		contract_unit_price DECIMAL(12, 2) COMMENT '合同单价',
 		total_amount DECIMAL(14, 2) COMMENT '总价（单价×数量）',
 		status VARCHAR(32) DEFAULT '待确认' COMMENT '状态：待确认/已确认/已完成/已取消',
@@ -187,6 +188,7 @@ TABLE_STATEMENTS = [
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 		INDEX idx_report_date (report_date),
 		INDEX idx_contract_no (contract_no),
+		INDEX idx_contract_id (contract_id),  -- 新增索引
 		INDEX idx_target_factory (target_factory_id),
 		INDEX idx_vehicle_no (vehicle_no),
 		INDEX idx_status (status),
@@ -204,6 +206,7 @@ TABLE_STATEMENTS = [
 		warehouse_name VARCHAR(64) COMMENT '磅单仓库名称',
 		weigh_ticket_no VARCHAR(64) COMMENT '过磅单号',
 		contract_no VARCHAR(64) COMMENT '合同编号（OCR识别）',
+		contract_id BIGINT COMMENT '关联合同ID（外键）',
 		delivery_id BIGINT COMMENT '关联的报货订单ID（通过日期+车牌匹配）',
 		vehicle_no VARCHAR(32) COMMENT '车牌号',
 		product_name VARCHAR(64) COMMENT '货物名称',
@@ -227,6 +230,7 @@ TABLE_STATEMENTS = [
 		INDEX idx_weigh_date (weigh_date),
 		INDEX idx_vehicle_no (vehicle_no),
 		INDEX idx_contract_no (contract_no),
+		INDEX idx_contract_id (contract_id),  -- 新增索引
 		INDEX idx_delivery_id (delivery_id),
 		INDEX idx_status (ocr_status),
 		INDEX idx_upload_status (upload_status),
