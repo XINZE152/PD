@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from openai import OpenAI
 from decimal import Decimal, ROUND_FLOOR
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -28,59 +29,12 @@ STANDARD_TRUCK_CAPACITY = Decimal('35')
 class DeliveryService:
     """报货订单服务"""
     # ============ 文本提取和合同匹配方法 ============
-    
-    # 字段识别模式（多种变体）
-    FIELD_PATTERNS = {
-        'vehicle_no': [
-            r'车号[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
-            r'车牌[号]?[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
-            r'vehicle_no[：:]?\s*([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6})',
-        ],
-        'driver_name': [
-            r'司机[姓名]?[：:]?\s*([\u4e00-\u9fa5]{2,4})',
-            r'驾驶员[：:]?\s*([\u4e00-\u9fa5]{2,4})',
-            r'driver_name[：:]?\s*([\u4e00-\u9fa5]{2,4})',
-            r'姓名[：:]?\s*([\u4e00-\u9fa5]{2,4})',
-        ],
-        'driver_id_card': [
-            r'身份证[号]?[：:]?\s*(\d{17}[\dXx])',
-            r'身份证号[：:]?\s*(\d{17}[\dXx])',
-            r'driver_id_card[：:]?\s*(\d{17}[\dXx])',
-        ],
-        'driver_phone': [
-            r'电话[：:]?\s*(1[3-9]\d{9})',
-            r'手机[号]?[：:]?\s*(1[3-9]\d{9})',
-            r'联系电话[：:]?\s*(1[3-9]\d{9})',
-            r'driver_phone[：:]?\s*(1[3-9]\d{9})',
-            r'电话\s*(\d{11})',
-        ],
-        'product_name': [
-            r'品类[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'品种[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'货物[名称]?[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'product_name[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'品名[：:]?\s*([\u4e00-\u9fa5]+)',
-        ],
-        'has_delivery_order': [
-            (r'(自带联单|有联单)', '有'),
-            (r'联单[：:]?\s*(有|是|true|1)', '有'),
-            (r'has_delivery_order[：:]?\s*(有|是|true|1)', '有'),
-            (r'(?<!无)(?<!没有)(?<![没不])联单(?!费)(?!号)(?!价)', '有'),
-            (r'(无联单|没有联单|不带联单)', '无'),
-            (r'联单[：:]?\s*(无|否|false|0)', '无'),
-            (r'has_delivery_order[：:]?\s*(无|否|false|0)', '无'),
-            (r'没.*联单', '无'),
-            (r'无.*联单', '无'),
-        ],
-        'factory_name': [
-            (r'(金利|豫光|万洋|大华|金凤|南方|中原|华铂)', None),
-            r'冶炼厂[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'目标工厂[：:]?\s*([\u4e00-\u9fa5]+)',
-            r'target_factory_name[：:]?\s*([\u4e00-\u9fa5]+)',
-        ],
-    }
-
-    LICENSE_PLATE_PATTERN = r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}[A-Z0-9挂学警港澳]?'
+    def __init__(self):
+        """初始化 OpenAI 客户端"""
+        self.client = OpenAI(
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
 
     def _normalize_driver_id_card(self, value: Optional[Any]) -> Optional[str]:
         """清洗司机身份证号，避免将无效超长值写入数据库。"""
@@ -1595,125 +1549,167 @@ class DeliveryService:
     # ============ 新增：文本提取和合同匹配方法 ============
         
     def extract_from_text(self, text: str) -> Dict[str, Any]:
+        
         """
-        从非结构化文本中提取报货订单字段（高精度版）
-        支持复杂格式，优先提取第一个有效车辆信息
+        使用通义千问API从非结构化文本中提取报货订单字段
         """
         if not text or not isinstance(text, str):
             return {}
 
-        # 预处理：统一符号、去除多余空格
-        normalized_lines = []
-        for line in text.split('\n'):
-            clean_line = re.sub(r'\s+', '', line.strip())
-            if clean_line:
-                # 统一冒号
-                clean_line = clean_line.replace('：', ':').replace('，', ',')
-                normalized_lines.append(clean_line)
-        
-        combined_text = ''.join(normalized_lines)
+        # 调用通义千问API提取信息
+        try:
+            completion = self.client.chat.completions.create(
+                model="qwen-vl-plus",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"""请从以下报单文本中提取关键信息，以JSON格式返回：
+                                
+            提取字段：
+            - vehicle_no: 车牌号（格式如豫U12345、京A88888等）
+            - driver_name: 司机姓名
+            - driver_phone: 司机手机号（11位）
+            - driver_id_card: 身份证号（18位）
+            - product_name: 货物品种（如电动、黑皮、通信、摩托车、大白、牵引、AGM、EFB、电信、小四斤、管式等）
+            - has_delivery_order: 是否有联单（有/无/需办）
+            - target_factory_name: 目标工厂（金利、豫光、万洋、大华、金凤、南方、中原、华铂等）
 
+            报单文本：
+            {text}
+
+            请仅返回JSON格式数据，不要包含其他说明。示例：
+            {{
+                "vehicle_no": "豫U12345",
+                "driver_name": "张三",
+                "driver_phone": "13800138000",
+                "driver_id_card": "410881199001011234",
+                "product_name": "电动",
+                "has_delivery_order": "有",
+                "target_factory_name": "金利"
+            }}"""
+                                        },
+                                    ],
+                                },
+                            ],
+                        )
+            
+            # 解析API返回结果
+            content = completion.choices[0].message.content
+            
+            # 尝试从返回内容中提取JSON
+            import json
+            import re
+            
+            # 查找JSON块
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
+            
+            # 清理和验证提取的数据
+            result = self._clean_extracted_data(result)
+            
+            # 设置默认值
+            if 'target_factory_name' not in result or not result['target_factory_name']:
+                result['target_factory_name'] = '金利'
+            if 'product_name' not in result or not result['product_name']:
+                result['product_name'] = '普通'
+            if 'has_delivery_order' not in result or not result['has_delivery_order']:
+                result['has_delivery_order'] = '无'
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"API提取信息失败: {e}")
+            # 降级到空结果
+            return {
+                'target_factory_name': '金利',
+                'product_name': '普通',
+                'has_delivery_order': '无'
+            }
+    def _clean_extracted_data(self, data: Dict) -> Dict:
+        """清理和验证提取的数据"""
         result = {}
         
-        # === 1. 车牌号（主车）===
-        plate_match = re.search(
-            r'([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}[A-Z0-9挂学警港澳]?)',
-            combined_text
-        )
-        if plate_match:
-            plate = plate_match.group(1)
-            # 如果是挂车，尝试找主车（但本方法只取第一个车牌）
-            result['vehicle_no'] = plate
-
-        # === 2. 司机姓名 ===
-        name_match = re.search(r'(?:姓名|司机)[:：]?([一-龯]{2,4})', combined_text)
-        if name_match:
-            result['driver_name'] = name_match.group(1)
-
-        # === 3. 司机电话（增强版）===
-        # 先提取所有数字，再判断是否为手机号
-        digits = re.sub(r'\D', '', combined_text)
-        if len(digits) >= 11:
-            # 找第一个11位手机号
-            for i in range(len(digits) - 10):
-                candidate = digits[i:i+11]
-                if candidate.startswith(('13', '14', '15', '16', '17', '18', '19')):
-                    result['driver_phone'] = candidate
-                    break
-
-        # === 4. 身份证 ===
-        id_match = re.search(r'(?:身份证|身份证号)[:：]?(\d{17}[\dXx])', combined_text, re.IGNORECASE)
-        if id_match:
-            result['driver_id_card'] = id_match.group(1).upper()
-
-        # === 5. 目标工厂（只认金利/豫光）===
-        factory_match = re.search(r'(金利|豫光)', combined_text)
-        if factory_match:
-            result['target_factory_name'] = factory_match.group(1)
-
-        # === 6. 品种（使用 FIELD_PATTERNS + 映射）===
-        product_raw = None
-        for pattern in self.FIELD_PATTERNS['product_name']:
-            match = re.search(pattern, combined_text, re.IGNORECASE)
-            if match:
-                product_raw = match.group(1).strip() if match.groups() else match.group(0).strip()
-                break
+        # 车牌号：提取第一个有效车牌
+        if data.get('vehicle_no'):
+            plate = str(data['vehicle_no']).strip().upper()
+            # 基本车牌格式验证
+            if re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}', plate):
+                result['vehicle_no'] = plate
         
-        if not product_raw:
-            # 尝试关键词匹配
-            keywords = ['电动', '新能源', '黑皮', '通信', '摩托车', '大白', '牵引', 'AGM', 'EFB', '电信', '小四斤', '管式']
-            for kw in keywords:
-                if kw in combined_text:
-                    product_raw = kw
-                    break
-
-        if product_raw:
-            # 应用品类映射
+        # 司机姓名
+        if data.get('driver_name'):
+            name = str(data['driver_name']).strip()
+            if len(name) >= 2:
+                result['driver_name'] = name
+        
+        # 手机号
+        if data.get('driver_phone'):
+            phone = re.sub(r'\D', '', str(data['driver_phone']))
+            if len(phone) == 11 and phone.startswith(('13', '14', '15', '16', '17', '18', '19')):
+                result['driver_phone'] = phone
+        
+        # 身份证号
+        if data.get('driver_id_card'):
+            id_card = str(data['driver_id_card']).strip().upper()
+            if re.match(r'^\d{17}[\dXx]$', id_card):
+                result['driver_id_card'] = id_card
+        
+        # 品种映射
+        if data.get('product_name'):
+            raw_product = str(data['product_name']).strip()
             PRODUCT_MAPPING = {
                 "电动车": "电动",
-                "黑皮": ["黑皮", "EFB"],
-                "新能源": ["电轿", "AGM"],
+                "黑皮": "黑皮",
+                "新能源": "电轿",
                 "通信": "电信",
-                "摩托车": ["摩托车", "小四斤"],
+                "摩托车": "摩托车",
                 "大白": "大白",
-                "牵引": "管式"
+                "牵引": "管式",
+                "AGM": "AGM",
+                "EFB": "EFB",
+                "电信": "电信",
+                "小四斤": "小四斤",
+                "管式": "管式"
             }
+            # 尝试匹配映射
+            for key, value in PRODUCT_MAPPING.items():
+                if key in raw_product or raw_product in key:
+                    result['product_name'] = value
+                    break
+            else:
+                result['product_name'] = raw_product
+        
+        # 联单状态标准化
+        if data.get('has_delivery_order'):
+            order_status = str(data['has_delivery_order']).strip()
+            positive = {'有', '是', 'true', '1', 'yes', '自带', '已上传'}
+            negative = {'无', '否', 'false', '0', 'no', '没有', '不带'}
+            need_handle = {'需办', '需要', '待办', '办理'}
             
-            variety = product_raw
-            if product_raw in PRODUCT_MAPPING:
-                mapping = PRODUCT_MAPPING[product_raw]
-                if isinstance(mapping, list):
-                    for std in mapping:
-                        if std in combined_text:
-                            variety = std
-                            break
-                    else:
-                        variety = mapping[0]
-                else:
-                    variety = mapping
-            result['product_name'] = variety
-
-        # === 7. 联单状态 ===
-        if '联单' in combined_text or '反向开票' in combined_text:
-            if any(kw in combined_text for kw in ['自带联单', '有联单', '已上传']):
+            low = order_status.lower()
+            if order_status in positive or low in positive:
                 result['has_delivery_order'] = '有'
-            elif any(kw in combined_text for kw in ['没联单', '无联单', '不带', '反向开票']):
-                result['has_delivery_order'] = '无'
-            elif any(kw in combined_text for kw in ['需要做联单', '要联单', '需联单']):
+            elif order_status in need_handle:
                 result['has_delivery_order'] = '需办'
             else:
                 result['has_delivery_order'] = '无'
-        else:
-            result['has_delivery_order'] = '无'
-
-        # === 8. 默认值补充 ===
-        if 'target_factory_name' not in result:
-            result['target_factory_name'] = '金利'  # 默认工厂
-        if 'product_name' not in result:
-            result['product_name'] = '普通'
-
+        
+        # 目标工厂
+        if data.get('target_factory_name'):
+            factory = str(data['target_factory_name']).strip()
+            valid_factories = ['金利', '豫光', '万洋', '大华', '金凤', '南方', '中原', '华铂']
+            for f in valid_factories:
+                if f in factory:
+                    result['target_factory_name'] = f
+                    break
+        
         return result
-
     def validate_extracted(self, data: Dict[str, Optional[str]]) -> Dict[str, any]:
         """验证提取的数据完整性"""
         required_fields = ['vehicle_no', 'driver_name', 'driver_phone']
@@ -1726,7 +1722,8 @@ class DeliveryService:
         
         if data.get('vehicle_no'):
             plate = data['vehicle_no']
-            if not re.match(self.LICENSE_PLATE_PATTERN, plate):
+            # 使用内联正则替代已删除的 LICENSE_PLATE_PATTERN
+            if not re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}', plate):
                 data['vehicle_no_error'] = '车牌号格式不正确'
         
         return {
