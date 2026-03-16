@@ -149,6 +149,7 @@ class TextExtractResponse(BaseModel):
     validation: ValidationResult = Field(..., description="验证结果")
     contract_match: ContractMatchInfo = Field(..., description="合同匹配信息")
     contract_no: Optional[str] = Field(None, description="匹配到的合同编号（若有）")
+    contract_id: Optional[int] = Field(None, description="匹配到的合同ID（若有）")
     ready_to_create: bool = Field(..., description="是否可直接创建报单")
     suggested_data: Optional[Dict[str, Any]] = Field(None, description="建议的报单数据")
 # ============ 路由 ============
@@ -176,6 +177,7 @@ async def parse_delivery_text(
                 'match_type': 'none'
             }),
             contract_no=(result.get('contract_match') or {}).get('contract_no') or result.get('extracted', {}).get('contract_no'),
+            contract_id=(result.get('contract_match') or {}).get('contract_id') or result.get('extracted', {}).get('contract_id'),
             ready_to_create=result.get('ready_to_create', False),
             suggested_data=result.get('suggested_data')
         )

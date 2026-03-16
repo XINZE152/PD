@@ -269,7 +269,7 @@ class DeliveryService:
                     # Step 1: 品种匹配（只匹配unit_price>0的有效品种）
                     cur.execute("""
                         SELECT c.contract_no, p.unit_price, c.total_quantity,
-                               CEIL(c.total_quantity / 35) as contract_trucks
+                               FLOOR(c.total_quantity / 35) as contract_trucks
                         FROM pd_contracts c
                         JOIN pd_contract_products p ON p.contract_id = c.id
                         WHERE c.smelter_company = %s
@@ -277,8 +277,8 @@ class DeliveryService:
                         AND p.unit_price > 0              -- 只匹配有效价格（价格>0）
                         AND c.status = '生效中'
                         AND c.contract_date <= %s
-                        AND (c.end_date IS NULL OR c.end_date > %s)
-                        ORDER BY c.created_at DESC, p.sort_order ASC
+                        AND (c.end_date IS NULL OR c.end_date >= %s)
+                        ORDER BY c.contract_date ASC, c.created_at ASC, p.sort_order ASC
                     """, (factory_name, product_name, effective_date, effective_date))
 
                     matching_contracts = cur.fetchall()
@@ -315,6 +315,8 @@ class DeliveryService:
                         if planned_trucks <= remaining:
                             # 找到够车数的合同！判断是否最后一单
                             is_last = (used_trucks + planned_trucks) >= contract_trucks
+
+                            logger.debug(f"选择合同用于报单: contract_no={contract_no}, contract_trucks={contract_trucks}, used_trucks={used_trucks}, remaining_before={remaining}, this_delivery_trucks={planned_trucks}")
 
                             return {
                                 'matched': True,
@@ -1796,10 +1798,11 @@ class DeliveryService:
                         JOIN pd_contract_products p ON p.contract_id = c.id
                         WHERE ({factory_sql})
                         AND p.product_name = %s
+                        AND p.unit_price > 0
                         AND c.status = '生效中'
                         AND c.contract_date <= %s
                         AND (c.end_date IS NULL OR c.end_date >= %s)
-                        ORDER BY c.created_at DESC
+                        ORDER BY c.contract_date ASC, c.created_at ASC, p.sort_order ASC
                         LIMIT 1
                     """
                     
@@ -1809,11 +1812,16 @@ class DeliveryService:
                     row = cur.fetchone()
                     
                     if row:
+                        contract_id = row['id'] if isinstance(row, dict) else row[0]
+                        contract_no = row['contract_no'] if isinstance(row, dict) else row[1]
+                        unit_price_val = (row['unit_price'] if isinstance(row, dict) else row[3])
+                        contract_date = row.get('contract_date') if isinstance(row, dict) else row[5]
+                        logger.debug(f"匹配到合同(exact): id={contract_id}, no={contract_no}, date={contract_date}, unit_price={unit_price_val}")
                         return {
                             'matched': True,
-                            'contract_no': row['contract_no'] if isinstance(row, dict) else row[1],
-                            'contract_id': row['id'] if isinstance(row, dict) else row[0],
-                            'unit_price': float(row['unit_price']) if (row['unit_price'] if isinstance(row, dict) else row[3]) else None,
+                            'contract_no': contract_no,
+                            'contract_id': contract_id,
+                            'unit_price': float(unit_price_val) if unit_price_val is not None else None,
                             'smelter_company': row['smelter_company'] if isinstance(row, dict) else row[2],
                             'match_type': 'exact',
                             'matched_product': row['matched_product'] if isinstance(row, dict) else row[4],
@@ -1833,10 +1841,11 @@ class DeliveryService:
                         JOIN pd_contract_products p ON p.contract_id = c.id
                         WHERE ({factory_sql})
                         AND p.product_name LIKE %s
+                        AND p.unit_price > 0
                         AND c.status = '生效中'
                         AND c.contract_date <= %s
                         AND (c.end_date IS NULL OR c.end_date >= %s)
-                        ORDER BY c.created_at DESC
+                        ORDER BY c.contract_date ASC, c.created_at ASC, p.sort_order ASC
                         LIMIT 1
                     """
                     
@@ -1846,11 +1855,16 @@ class DeliveryService:
                     row = cur.fetchone()
                     
                     if row:
+                        contract_id = row['id'] if isinstance(row, dict) else row[0]
+                        contract_no = row['contract_no'] if isinstance(row, dict) else row[1]
+                        unit_price_val = (row['unit_price'] if isinstance(row, dict) else row[3])
+                        contract_date = row.get('contract_date') if isinstance(row, dict) else row[5]
+                        logger.debug(f"匹配到合同(fuzzy): id={contract_id}, no={contract_no}, date={contract_date}, unit_price={unit_price_val}")
                         return {
                             'matched': True,
-                            'contract_no': row['contract_no'] if isinstance(row, dict) else row[1],
-                            'contract_id': row['id'] if isinstance(row, dict) else row[0],
-                            'unit_price': float(row['unit_price']) if (row['unit_price'] if isinstance(row, dict) else row[3]) else None,
+                            'contract_no': contract_no,
+                            'contract_id': contract_id,
+                            'unit_price': float(unit_price_val) if unit_price_val is not None else None,
                             'smelter_company': row['smelter_company'] if isinstance(row, dict) else row[2],
                             'match_type': 'fuzzy',
                             'matched_product': row['matched_product'] if isinstance(row, dict) else row[4],
@@ -1891,11 +1905,15 @@ class DeliveryService:
         validation = self.validate_extracted(extracted.copy())
         
         # 3. 匹配合同
+        # Prefer explicit target factory name if extracted (更可靠的目标工厂字段)
+        factory_for_match = extracted.get('target_factory_name') or extracted.get('factory_name')
         contract_match = self.match_contract_by_factory_and_product(
-            factory_name=extracted.get('factory_name'),
+            factory_name=factory_for_match,
             product_name=extracted.get('product_name'),
             report_date=report_date
         )
+
+        logger.debug(f"合同匹配结果: factory={factory_for_match}, product={extracted.get('product_name')}, result={contract_match}")
         
         # 4. 组装结果
         result = {
