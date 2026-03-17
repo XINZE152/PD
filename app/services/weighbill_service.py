@@ -356,12 +356,22 @@ class WeighbillService:
 
     # ========== 报单匹配 ==========
 
-    def match_delivery_info(self, weigh_date: str, vehicle_no: str) -> Optional[Dict]:
-        """通过日期+车牌号匹配报货订单"""
+    def match_delivery_info(self, weigh_date: str, vehicle_no: str,
+                            driver_name: Optional[str] = None,
+                            contract_no: Optional[str] = None) -> Optional[Dict]:
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    params = [vehicle_no, weigh_date, weigh_date, weigh_date, weigh_date]
+                    extra_conditions = ""
+                    if driver_name:
+                        extra_conditions += " AND driver_name = %s"
+                        params.append(driver_name)
+                    if contract_no:
+                        extra_conditions += " AND contract_no = %s"
+                        params.append(contract_no)
+
+                    cur.execute(f"""
                         SELECT * FROM pd_deliveries 
                         WHERE vehicle_no = %s 
                         AND (
@@ -370,9 +380,10 @@ class WeighbillService:
                             OR report_date = DATE_SUB(%s, INTERVAL 1 DAY)
                         )
                         AND status != '已取消'
-                        ORDER BY ABS(DATEDIFF(report_date, %s)), created_at DESC
+                        {extra_conditions}
+                        ORDER BY ABS(DATEDIFF(report_date, %s)), created_at ASC
                         LIMIT 1
-                    """, (vehicle_no, weigh_date, weigh_date, weigh_date, weigh_date))
+                    """, tuple(params))
                     row = cur.fetchone()
                     if not row:
                         return None
@@ -383,7 +394,6 @@ class WeighbillService:
             return None
 
     def auto_fill_data(self, ocr_data: Dict) -> Dict:
-        """自动关联填充数据"""
         result = ocr_data.copy()
         weigh_date = ocr_data.get("weigh_date")
         vehicle_no = ocr_data.get("vehicle_no")
@@ -391,9 +401,12 @@ class WeighbillService:
         product_name = ocr_data.get("product_name")
         net_weight = ocr_data.get("net_weight")
 
-        # 匹配报货订单
+        # 匹配报货订单（传入可选合同号）
         if weigh_date and vehicle_no:
-            delivery = self.match_delivery_info(weigh_date, vehicle_no)
+            delivery = self.match_delivery_info(
+                weigh_date, vehicle_no,
+                contract_no=contract_no  # 司机姓名暂未解析，可后续扩展
+            )
             if delivery:
                 result["matched_delivery_id"] = delivery["id"]
                 result["warehouse"] = delivery.get("warehouse")
@@ -405,7 +418,7 @@ class WeighbillService:
             else:
                 result["match_message"] = "未找到匹配的报货订单，请手动填写"
 
-        # 获取合同单价
+        # 获取合同单价（与原逻辑相同）
         if contract_no and product_name:
             price = self.get_contract_price_by_product(contract_no, product_name)
             if price:
