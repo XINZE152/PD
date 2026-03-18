@@ -379,7 +379,7 @@ class WeighbillService:
                             OR report_date = DATE_ADD(%s, INTERVAL 1 DAY)
                             OR report_date = DATE_SUB(%s, INTERVAL 1 DAY)
                         )
-                        AND status != '已取消'
+                        AND status IN ('已确认', '已完成')         -- 新增：只匹配已确认报单
                         {extra_conditions}
                         ORDER BY ABS(DATEDIFF(report_date, %s)), created_at ASC
                         LIMIT 1

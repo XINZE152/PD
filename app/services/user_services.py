@@ -19,23 +19,26 @@ class UserStatus(IntEnum):
     DELETED = 2  # 已注销（软删除）
 
 
+# user_services.py
+
 class UserRole:
-    """用户角色"""
     ADMIN = "管理员"
     MANAGER = "大区经理"
     WAREHOUSE = "自营库管理"
     FINANCE = "财务"
     ACCOUNTANT = "会计"
-    
-    VALID_ROLES = [ADMIN, MANAGER, WAREHOUSE, FINANCE, ACCOUNTANT]
-    
-    # 角色层级（数字越大权限越高）
+    AUDITOR = "审核主管"      # 新增
+
+    VALID_ROLES = [ADMIN, MANAGER, WAREHOUSE, FINANCE, ACCOUNTANT, AUDITOR]
+
+    # 角色层级（数字越大权限越高，用于权限比较）
     HIERARCHY = {
         ADMIN: 100,
         MANAGER: 80,
+        AUDITOR: 70,          # 介于管理员和大区经理之间
         WAREHOUSE: 60,
         FINANCE: 60,
-        ACCOUNTANT: 40
+        ACCOUNTANT: 40,
     }
 
 
@@ -528,6 +531,8 @@ class PermissionService:
                 """)
                 # 初始化默认角色模板数据（使用内存默认，但会写入数据库）
                 # 内存默认模板（供初始化使用）
+                # user_services.py (PermissionService.ensure_table_exists 方法内部)
+
                 default_role_templates = {
                     '管理员': {f: 1 for f in PermissionService.get_all_fields()},
                     '大区经理': {
@@ -540,15 +545,15 @@ class PermissionService:
                         'perm_customer_manage': 1,
                         'perm_delivery_manage': 1,
                         'perm_weighbill_manage': 1,
-                        'perm_warehouse_manage': 1,      # 新增
-                        'perm_payee_manage': 1,          # 新增
+                        'perm_warehouse_manage': 1,
+                        'perm_payee_manage': 1,
                         'perm_account_manage': 1,
                         'perm_role_manage': 1,
                     },
                     '自营库管理': {
                         'perm_delivery_manage': 1,
                         'perm_weighbill_manage': 1,
-                        'perm_warehouse_manage': 1,      # 新增：自营库管理可以管理库房
+                        'perm_warehouse_manage': 1,
                     },
                     '财务': {
                         'perm_jinli_payment': 1,
@@ -557,12 +562,19 @@ class PermissionService:
                         'perm_payout': 1,
                         'perm_payout_stats': 1,
                         'perm_report_stats': 1,
-                        'perm_payee_manage': 1,          # 新增：财务可以管理收款人
+                        'perm_payee_manage': 1,
                     },
                     '会计': {
                         'perm_jinli_payment': 1,
                         'perm_yuguang_payment': 1,
                         'perm_report_stats': 1,
+                    },
+                    '审核主管': {  # 新增
+                        'perm_delivery_manage': 1,  # 报货管理（查看、审核）
+                        'perm_weighbill_manage': 1,  # 磅单管理
+                        'perm_contract_progress': 1,  # 合同发运进度
+                        'perm_report_stats': 1,  # 统计报表（可选）
+                        'perm_customer_manage': 1,  # 客户管理（可选）
                     },
                 }
                 for role, perms in default_role_templates.items():

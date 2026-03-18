@@ -577,16 +577,23 @@ async def update_delivery(
         delivery_id: int,
         request: DeliveryUpdateRequest,
         service: DeliveryService = Depends(get_delivery_service),
-        current_user: str = "admin"
+        current_user: dict = Depends(get_current_user)   # 注入当前用户
 ):
-    """编辑报货订单（纯JSON，不涉及文件上传）"""
     try:
         data = {k: v for k, v in request.dict().items() if v is not None}
-
         if not data:
             raise HTTPException(status_code=400, detail="没有要更新的字段")
 
-        result = service.update_delivery(delivery_id, data, None, False)
+        # 调用服务层，传入 current_user
+        result = service.update_delivery(
+            delivery_id,
+            data,
+            None,
+            None,
+            delete_image=False,
+            uploaded_by=None,
+            current_user=current_user          # 新增参数
+        )
 
         if result["success"]:
             return result
@@ -651,7 +658,26 @@ async def upload_delivery_order(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# deliveries.py
 
+class AuditRequest(BaseModel):
+    status: str = Field(..., description="新审核状态，如'已确认'")
+
+@router.post("/{delivery_id}/audit", summary="审核报单")
+async def audit_delivery(
+    delivery_id: int,
+    body: AuditRequest,
+    service: DeliveryService = Depends(get_delivery_service),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    审核报单，修改审核状态。
+    仅审核主管或管理员可操作。
+    """
+    result = service.audit_delivery(delivery_id, body.status, current_user)
+    if result["success"]:
+        return result
+    raise HTTPException(status_code=400, detail=result.get("error"))
 @router.put("/{delivery_id}/modify-order", summary="修改联单图片")
 async def modify_delivery_order(
         delivery_id: int,

@@ -218,6 +218,7 @@ class DeliveryService:
             'reason': str or None
         }
         """
+        from datetime import datetime
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -673,8 +674,8 @@ class DeliveryService:
     def create_delivery(
             self,
             data: Dict,
-            delivery_order_image: bytes = None,  # 联单图片（有联单时）
-            voucher_images: List[bytes] = None,  # 凭证图片列表（无联单时，最多6张）
+            delivery_order_image: bytes = None,
+            voucher_images: List[bytes] = None,
             current_user: dict = None,
             confirm_flag: bool = False
     ) -> Dict[str, Any]:
@@ -774,7 +775,10 @@ class DeliveryService:
             quantity = Decimal(str(data.get('quantity', 0)))
             planned_trucks = self._calculate_trucks(quantity)
             data['planned_trucks'] = planned_trucks
-
+            if current_user and current_user.get("role") == "大区经理":
+                data['status'] = '待确认'
+            else:
+                data['status'] = '已确认'
             # 合同匹配
             target_factory = data.get('target_factory_name')
             exact_contract_no = data.get('contract_no')  # 获取用户指定的合同编号
@@ -945,7 +949,8 @@ class DeliveryService:
             delivery_order_image: bytes = None,
             voucher_images: List[bytes] = None,
             delete_image: bool = False,
-            uploaded_by: str = None
+            uploaded_by: str = None,
+            current_user: dict = None  # 新增参数
     ) -> Dict[str, Any]:
         """更新报货订单（支持替换凭证图片列表）"""
         temp_new_files = []
@@ -1046,7 +1051,14 @@ class DeliveryService:
                             new_vouchers = new_paths
                             new_upload_status = '待上传'
                         # 如果没有提供 voucher_images，则保持原有凭证列表（不修改）
-
+                    if 'status' in data:
+                        user_role = current_user.get("role") if current_user else None
+                        # 允许修改状态的角色：审核主管、管理员
+                        if user_role not in ["审核主管", "管理员"]:
+                            return {
+                                "success": False,
+                                "error": "无权修改报单状态，仅审核主管或管理员可操作"
+                            }
                     # 准备更新数据
                     update_data = {
                         'has_delivery_order': has_order,
@@ -1109,6 +1121,30 @@ class DeliveryService:
             logger.error(f"更新报货订单失败: {e}")
             return {"success": False, "error": str(e)}
 
+    # delivery_service.py - class DeliveryService
+
+    def audit_delivery(self, delivery_id: int, new_status: str, current_user: dict) -> Dict[str, Any]:
+        """
+        审核报单，修改审核状态（仅限审核主管/管理员）
+        """
+        user_role = current_user.get("role") if current_user else None
+        if user_role not in ["审核主管", "管理员"]:
+            return {"success": False, "error": "无权审核报单"}
+
+        # 可选：限制允许修改的状态值
+        valid_status = ['已确认', '已完成', '已取消']
+        if new_status not in valid_status:
+            return {
+                "success": False,
+                "error": f"无效状态，可选：{valid_status}"
+            }
+
+        # 调用通用更新方法（只传递 status 字段）
+        return self.update_delivery(
+            delivery_id,
+            data={'status': new_status},
+            current_user=current_user
+        )
     def add_voucher_images(self, delivery_id: int, image_bytes_list: List[bytes], vehicle_no: str = None) -> Dict[
         str, Any]:
         """向指定订单追加凭证图片（最多6张）"""
