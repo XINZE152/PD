@@ -92,7 +92,6 @@ class DeliveryOut(BaseModel):
     operations: Optional[dict] = None
     voucher_images: Optional[List[str]] = None
     position: Optional[str] = None  # 岗位
-    submitter_name: Optional[str] = None  # 提交人姓名
 
 class BatchDeliveryOrderItem(BaseModel):
     """单个联单上传项（内部使用）"""
@@ -250,7 +249,6 @@ async def create_delivery(
     reporter_id: Optional[int] = Form(None, description="报单人ID"),
     reporter_name: Optional[str] = Form(None, description="报单人姓名"),
     position: Optional[str] = Form(None, description="岗位"),
-    submitter_name: Optional[str] = Form(None, description="提交人姓名"),
     confirm_flag: bool = Form(False, description="二次确认标志"),
     delivery_order_image: Optional[UploadFile] = File(None, description="有联单时上传的联单图片"),
     voucher_images: List[UploadFile] = File(None, description="无联单时上传的凭证图片（最多6张）"),
@@ -276,7 +274,6 @@ async def create_delivery(
             "reporter_id": reporter_id,
             "reporter_name": reporter_name,
             "position": position,
-            "submitter_name": submitter_name,
         }
 
         # 读取联单图片
@@ -338,7 +335,6 @@ class DeliveryCreateJsonRequest(BaseModel):
     reporter_id: Optional[int] = Field(None, description="报单人ID")
     reporter_name: Optional[str] = Field(None, description="报单人姓名")
     position: Optional[str] = Field(None, description="岗位")
-    submitter_name: Optional[str] = Field(None, description="提交人姓名")
     confirm_flag: bool = Field(False, description="二次确认标志")
 
 @router.post("/{delivery_id}/vouchers/append", summary="追加凭证图片")

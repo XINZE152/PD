@@ -175,7 +175,6 @@ TABLE_STATEMENTS = [
 		reporter_name VARCHAR(64) COMMENT '报单人姓名',
 		-- ===== 需求4：新增岗位和提交人姓名字段 =====
 		position VARCHAR(50) COMMENT '岗位',
-		submitter_name VARCHAR(100) COMMENT '提交人姓名',
 		-- ===== 需求4结束 =====
 		payee VARCHAR(64) COMMENT '收款人',
 		service_fee DECIMAL(14, 2) DEFAULT 0 COMMENT '服务费',

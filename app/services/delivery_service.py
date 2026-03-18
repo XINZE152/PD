@@ -735,14 +735,21 @@ class DeliveryService:
 
             uploader_id = None
             uploader_name = "system"
+            user_role = None  # 用户角色，用于填充岗位
             if current_user:
                 uploader_id = current_user.get("id")
                 uploader_name = current_user.get("name") or current_user.get("account") or "system"
+                user_role = current_user.get("role")  # 从 current_user 提取 role
 
             reporter_id = data.get('reporter_id') or uploader_id
             reporter_name = data.get('reporter_name') or data.get('shipper') or uploader_name
             if not data.get('shipper'):
                 data['shipper'] = reporter_name
+
+            # 自动填充岗位：优先使用传入的 position，否则使用用户的 role
+            if not data.get('position') and user_role:
+                data['position'] = user_role
+                logger.info(f"【DEBUG】自动填充岗位: {user_role}")
 
             service_fee = self._calculate_service_fee(has_order)
             data['service_fee'] = service_fee
@@ -763,11 +770,21 @@ class DeliveryService:
             products = self._parse_products(data.get('products'), data.get('product_name'))
             if not products:
                 return {"success": False, "error": "货物品种不能为空"}
-            data['products'] = products
+    
+           # ===== 对所有品种进行映射转换 =====
+            mapped_products = []
+            for p in products:
+                mapped_product = self._convert_to_mill_product(p)
+                mapped_products.append(mapped_product)
+            products = mapped_products
 
-            # ---- 新增：将主品种转换为冶炼厂品种用于合同匹配 ----
-            owner_main_product = products[0] if products else data.get('product_name')
-            mill_main_product = self._convert_to_mill_product(owner_main_product)
+            # 更新主品种为映射后的值
+            if products:
+                data['product_name'] = products[0]
+            # =====================================
+
+            # 合同匹配使用映射后的品种
+            mill_main_product = products[0] if products else data.get('product_name')
             # ----------------------------------------------
 
             # 计算本单总车数
@@ -819,15 +836,16 @@ class DeliveryService:
                         'reporter_id', 'reporter_name', 'voucher_images',
                         # ===== 需求4：新增字段 =====
                         'position',
-                        'submitter_name',
                         # ===== 需求4结束 =====
                     ]
+                    main_product = products[0] if products else data.get('product_name')
+                    # 确保主品种也经过映射
                     values = [
                         data.get('report_date'),
                         data.get('warehouse'),
                         data.get('target_factory_id'),
                         target_factory,
-                        products[0] if products else data.get('product_name'),
+                        main_product,
                         quantity,
                         planned_trucks,
                         data.get('vehicle_no'),
@@ -851,7 +869,6 @@ class DeliveryService:
                         reporter_name,
                         json.dumps(data.get('voucher_images')) if data.get('voucher_images') else None,
                         data.get('position'),
-                        data.get('submitter_name'),
                     ]
 
                     if has_products_column:
@@ -1047,6 +1064,25 @@ class DeliveryService:
                             new_upload_status = '待上传'
                         # 如果没有提供 voucher_images，则保持原有凭证列表（不修改）
 
+                    # ========== 新增：处理品种字段映射 ==========
+                    if 'product_name' in data:
+                        data['product_name'] = self._convert_to_mill_product(data['product_name'])
+                    
+                    if 'products' in data:
+                        # 解析品种列表
+                        raw_products = data['products']
+                        if isinstance(raw_products, str):
+                            product_list = [p.strip() for p in raw_products.split(',') if p.strip()]
+                        elif isinstance(raw_products, list):
+                            product_list = raw_products
+                        else:
+                            product_list = []
+                        
+                        # 映射每个品种
+                        mapped_list = [self._convert_to_mill_product(p) for p in product_list]
+                        data['products'] = ','.join(mapped_list) if mapped_list else None
+                    # =========================================
+
                     # 准备更新数据
                     update_data = {
                         'has_delivery_order': has_order,
@@ -1059,7 +1095,7 @@ class DeliveryService:
                     for key in ['report_date', 'warehouse', 'target_factory_id', 'target_factory_name',
                                 'product_name', 'quantity', 'vehicle_no', 'driver_name', 'driver_phone',
                                 'driver_id_card', 'shipper', 'payee', 'service_fee', 'contract_no',
-                                'contract_unit_price', 'total_amount', 'status', 'reporter_id', 'reporter_name','position', 'submitter_name']:
+                                'contract_unit_price', 'total_amount', 'status', 'reporter_id', 'reporter_name','position']:
                         if key in data:
                             update_data[key] = data[key]
 
@@ -1450,8 +1486,6 @@ class DeliveryService:
                     )
                     if 'position' not in data:
                         data['position'] = None
-                    if 'submitter_name' not in data:
-                        data['submitter_name'] = None
                     # ========== 新增部分：处理 PDF 字段 ==========
                     # 添加一个布尔标志，方便前端判断
                     data['has_pdf'] = bool(data.get('delivery_order_pdf'))
@@ -1791,30 +1825,11 @@ class DeliveryService:
             if re.match(r'^\d{17}[\dXx]$', id_card):
                 result['driver_id_card'] = id_card
         
-        # 品种映射
+        # ========== 修改：品种不做映射，保持原始提取值 ==========
         if data.get('product_name'):
-            raw_product = str(data['product_name']).strip()
-            PRODUCT_MAPPING = {
-                "电动车": "电动",
-                "黑皮": "黑皮",
-                "新能源": "电轿",
-                "通信": "电信",
-                "摩托车": "摩托车",
-                "大白": "大白",
-                "牵引": "管式",
-                "AGM": "AGM",
-                "EFB": "EFB",
-                "电信": "电信",
-                "小四斤": "小四斤",
-                "管式": "管式"
-            }
-            # 尝试匹配映射
-            for key, value in PRODUCT_MAPPING.items():
-                if key in raw_product or raw_product in key:
-                    result['product_name'] = value
-                    break
-            else:
-                result['product_name'] = raw_product
+            # 只清洗空格，不做任何映射转换
+            result['product_name'] = str(data['product_name']).strip()
+        # =========================================
         
         # 联单状态标准化
         if data.get('has_delivery_order'):
@@ -2033,14 +2048,17 @@ class DeliveryService:
         # 2. 验证数据
         validation = self.validate_extracted(extracted.copy())
 
-        # ---- 新增：转换品种为冶炼厂品种用于合同匹配 ----
+        # ---- 转换品种为冶炼厂品种 ----
         original_product = extracted.get('product_name')
         mill_product = self._convert_to_mill_product(original_product) if original_product else None
+        
+        # 更新 extracted 中的品种为映射后的值，这样前端拿到的是正确的品种
+        if mill_product:
+            extracted['product_name'] = mill_product
         # ----------------------------------------------
         
         # 3. 匹配合同
-        # Prefer explicit target factory name if extracted (更可靠的目标工厂字段)
-        factory_for_match = extracted.get('target_factory_name') or extracted.get('factory_name')
+        factory_for_match = extracted.get('target_factory_name')
         contract_match = self.match_contract_by_factory_and_product(
             factory_name=factory_for_match,
             product_name=mill_product,
