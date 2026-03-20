@@ -495,25 +495,7 @@ class PermissionService:
     @classmethod
     def get_all_fields(cls):
         """获取所有权限字段名列表（动态）"""
-        if cls._fields_cache is None:
-            cls._load_definitions()
-        return cls._fields_cache
-
-    @classmethod
-    def get_label(cls, field_name):
-        """获取指定权限字段的显示名称"""
-        if cls._labels_cache is None:
-            cls._load_definitions()
-        return cls._labels_cache.get(field_name, field_name)
-
-    @classmethod
-    def refresh_cache(cls):
-        """刷新缓存（在增删权限定义后调用）"""
-        cls._fields_cache = None
-        cls._labels_cache = None
-        cls._load_definitions()
-
-    @staticmethod
+      @staticmethod
     def ensure_table_exists():
         """确保权限表、角色模板表、权限定义表存在"""
         # 原有代码不变，但需保证 pd_permission_definitions 已创建
@@ -529,10 +511,14 @@ class PermissionService:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
-                # 初始化默认角色模板数据（使用内存默认，但会写入数据库）
-                # 内存默认模板（供初始化使用）
-                # user_services.py (PermissionService.ensure_table_exists 方法内部)
-
+                
+                # 检查是否已有数据，有则跳过初始化
+                cur.execute("SELECT COUNT(*) as count FROM pd_role_templates")
+                row = cur.fetchone()
+                if row and row['count'] > 0:
+                    return  # 已有数据，不覆盖
+                
+                # 只在表为空时才插入默认模板
                 default_role_templates = {
                     '管理员': {f: 1 for f in PermissionService.get_all_fields()},
                     '大区经理': {
@@ -575,6 +561,16 @@ class PermissionService:
                         'perm_contract_progress': 1,  # 合同发运进度
                         'perm_report_stats': 1,  # 统计报表（可选）
                         'perm_customer_manage': 1,  # 客户管理（可选）
+                    },
+                }
+                for role, perms in default_role_templates.items():
+                    # 补齐所有字段（未在模板中定义的置0）
+                    full_perms = {f: perms.get(f, 0) for f in PermissionService.get_all_fields()}
+                    cur.execute("""
+                        INSERT INTO pd_role_templates (role, template_json) 
+                        VALUES (%s, %s)
+                    """, (role, json.dumps(full_perms)))
+                conn.commit()可选）
                     },
                 }
                 for role, perms in default_role_templates.items():
