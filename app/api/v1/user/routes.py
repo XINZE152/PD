@@ -311,6 +311,19 @@ def create_user(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/managers", summary="查看所有大区经理")
+def list_managers(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    獲取所有大區經理列表（正常狀態），用於下拉選項等場景
+    """
+    if current_user.get("role") not in ["管理员", "大区经理"]:
+        raise HTTPException(status_code=403, detail="无权查看大区经理列表")
+    managers = AuthService.list_managers()
+    return {"list": managers}
+
+
 @router.get("/users", summary="用户列表")
 def list_users(
     page: int = 1,

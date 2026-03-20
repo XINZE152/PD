@@ -460,6 +460,23 @@ class AuthService:
                     "pages": (total + size - 1) // size,
                     "list": rows
                 }
+
+    @staticmethod
+    def list_managers() -> list:
+        """
+        獲取所有大區經理（正常狀態）
+        返回: [{"id": 1, "name": "張三", "account": "zhangsan"}, ...]
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, name, account, role, phone
+                    FROM pd_users
+                    WHERE role = %s AND status = %s
+                    ORDER BY name
+                """, (UserRole.MANAGER, int(UserStatus.NORMAL)))
+                rows = cur.fetchall()
+                return [dict(r) for r in rows]
     
     @staticmethod
     def check_permission(user_role: str, required_role: str) -> bool:
