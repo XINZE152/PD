@@ -312,6 +312,15 @@ class DeliveryService:
                         }
 
                     # Step 2: 遍历所有匹配的合同，找车数足够的
+                    report_date_obj = None
+                    if report_date:
+                        try:
+                            report_date_obj = datetime.strptime(report_date, "%Y-%m-%d").date()
+                        except ValueError:
+                            # 如果日期格式不正确，使用当前日期
+                            report_date_obj = datetime.today().date()
+                    else:
+                        report_date_obj = datetime.today().date()
                     skipped_contracts = []  # 记录车数不足被跳过的合同
 
                     for idx, contract in enumerate(matching_contracts):
@@ -413,11 +422,25 @@ class DeliveryService:
                             # 车数不足，继续检查下一个合同
                             continue
 
-                    # Step 3: 所有匹配的合同车数都不够                 'matched_index': idx + 1,  # 第几个匹配的合同
-                                'total_matched': len(matching_contracts),
-                                'skipped_contracts': skipped_contracts,
-                                'reason': None
-                            }
+                    # Step 3: 所有匹配的合同车数都不够
+                    error_details = []
+                    for info in skipped_contracts:
+                        error_details.append(
+                            f"[{info['contract_no']}]总{info['total_trucks']}车/"
+                            f"已用{info['used_trucks']}车/"
+                            f"剩{info['remaining_trucks']}车"
+                        )
+
+                    return {
+                        'matched': False,
+                        'reason': f'找到{len(matching_contracts)}个匹配品种[{product_name}]的合同，'
+                                  f'但车数均不足本单需要{planned_trucks}车：'
+                                  f'{"; ".join(error_details)}',
+                        'contract_no': None,
+                        'unit_price': None,
+                        'skipped_contracts': skipped_contracts,
+                        'suggest': '请拆分报单数量，或创建新车数充足的新合同'
+                    }
                         
 
                     # Step 3: 所有匹配的合同车数都不够
@@ -2191,6 +2214,119 @@ class DeliveryService:
         except Exception as e:
             logger.error(f"替换 PDF 失败: {e}")
             return {"success": False, "error": str(e)}
+        
+    def list_deliveries_by_manager(
+        self,
+        manager_name: str,
+        audit_status: str = None,
+        date_from: str = None,
+        date_to: str = None,
+        page: int = 1,
+        page_size: int = 20
+        ) -> Dict[str, Any]:
+        """
+        按大区经理查询报单列表
+            
+        逻辑：通过 position 字段匹配大区经理，或通过 reporter_name 匹配
+        """
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    where_clauses = []
+                    params = []
+
+                    # 匹配大区经理（通过 position 字段或 reporter_name）
+                    where_clauses.append("(position = %s OR reporter_name = %s OR uploader_name = %s)")
+                    params.extend([manager_name, manager_name, manager_name])
+
+                    # 审核状态筛选
+                    if audit_status:
+                        if audit_status == '待审核':
+                            where_clauses.append("status = '待确认'")
+                        elif audit_status == '已审核':
+                            where_clauses.append("status IN ('已确认', '已完成', '已取消')")
+
+                    if date_from:
+                        where_clauses.append("report_date >= %s")
+                        params.append(date_from)
+
+                    if date_to:
+                        where_clauses.append("report_date <= %s")
+                        params.append(date_to)
+
+                    where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+                    # 查询总数
+                    cur.execute(f"SELECT COUNT(*) as total FROM pd_deliveries {where_sql}", tuple(params))
+                    total = cur.fetchone()["total"]
+
+                    # 查询列表
+                    offset = (page - 1) * page_size
+                    cur.execute(f"""
+                        SELECT * FROM pd_deliveries 
+                        {where_sql}
+                        ORDER BY created_at DESC
+                        LIMIT %s OFFSET %s
+                    """, tuple(params + [page_size, offset]))
+
+                    rows = cur.fetchall()
+                    data = []
+                    for row in rows:
+                        item = dict(row)
+                        
+                        # 解析 voucher_images
+                        raw_vouchers = item.get('voucher_images')
+                        if raw_vouchers:
+                            try:
+                                parsed = json.loads(raw_vouchers) if isinstance(raw_vouchers, str) else raw_vouchers
+                                item['voucher_images'] = parsed if isinstance(parsed, list) else []
+                            except Exception:
+                                item['voucher_images'] = []
+                        else:
+                            item['voucher_images'] = []
+                        
+                        # 格式化日期
+                        for key in ['report_date', 'created_at', 'updated_at', 'uploaded_at']:
+                            if item.get(key):
+                                item[key] = str(item[key])
+
+                        # 解析品种列表
+                        if item.get('products'):
+                            item['products'] = [p.strip() for p in item['products'].split(',') if p.strip()]
+                            item['product_count'] = len(item['products'])
+                        else:
+                            item['products'] = [item.get('product_name')] if item.get('product_name') else []
+                            item['product_count'] = 1
+
+                        # 显示转换
+                        item["has_delivery_order_display"] = '是' if item.get('has_delivery_order') == '有' else '否'
+                        item["upload_status_display"] = '是' if item.get('upload_status') == '已上传' else '否'
+
+                        if item.get('service_fee'):
+                            item['service_fee'] = float(item['service_fee'])
+
+                        # 操作权限
+                        item['operations'] = self._build_operations(
+                            item.get('has_delivery_order'),
+                            item.get('upload_status'),
+                            item.get('delivery_order_image')
+                        )
+
+                        data.append(item)
+
+                    return {
+                        "success": True,
+                        "data": data,
+                        "total": total,
+                        "page": page,
+                        "page_size": page_size,
+                        "manager_name": manager_name,
+                        "audit_status": audit_status
+                    }
+
+        except Exception as e:
+            logger.error(f"按大区经理查询报单失败: {e}")
+            return {"success": False, "error": str(e), "data": [], "total": 0}
 
     def delete_delivery_pdf(self, delivery_id: int) -> Dict[str, Any]:
         """删除 PDF 文件"""
@@ -2222,5 +2358,6 @@ def get_delivery_service():
     if _delivery_service is None:
         _delivery_service = DeliveryService()
     return _delivery_service
+
 
 

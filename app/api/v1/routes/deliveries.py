@@ -1235,3 +1235,33 @@ async def delete_delivery_pdf(
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+@router.get("/by-manager", summary="按大区经理查询报单", response_model=dict)
+async def list_deliveries_by_manager(
+    manager_name: str = Query(..., description="大区经理姓名（必填）"),
+    audit_status: Optional[str] = Query(None, description="审核状态筛选：待审核/已审核/全部"),
+    date_from: Optional[str] = Query(None, description="开始日期"),
+    date_to: Optional[str] = Query(None, description="结束日期"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    service: DeliveryService = Depends(get_delivery_service),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    按大区经理查询其负责的报单列表
+    
+    - 需要审核主管或管理员权限
+    - 支持按审核状态筛选：待审核(待确认)、已审核(已确认/已完成/已取消)
+    """
+    # 权限校验
+    user_role = current_user.get("role") if current_user else None
+    if user_role not in ["审核主管", "管理员"]:
+        raise HTTPException(status_code=403, detail="无权查看，仅审核主管或管理员可操作")
+    
+    return service.list_deliveries_by_manager(
+        manager_name=manager_name,
+        audit_status=audit_status,
+        date_from=date_from,
+        date_to=date_to,
+        page=page,
+        page_size=page_size
+    )
