@@ -14,7 +14,6 @@ from app.core.paths import TEMP_UPLOADS_DIR
 from app.services.weighbill_service import WeighbillService, get_weighbill_service
 from app.services.contract_service import get_conn
 from core.auth import get_current_user
-import services
 
 router = APIRouter(prefix="/weighbills", tags=["磅单管理"])
 logger = logging.getLogger(__name__)
@@ -165,7 +164,13 @@ class WeighbillBatchUploadResponse(BaseModel):
     success_list: List[Dict] = []
     failed_list: List[Dict] = []
 
+class BatchPriceUpdateItem(BaseModel):
+    product_name: str = Field(..., description="品种名称")
+    unit_price: float = Field(..., description="新单价（元/吨）")
 
+class BatchPriceUpdateRequest(BaseModel):
+    delivery_id: int = Field(..., description="报单ID")
+    prices: List[BatchPriceUpdateItem] = Field(..., description="单价更新列表")
 # ============ 路由 ============
 
 @router.post("/ocr", summary="OCR 识别磅单", response_model=WeighbillOCRResponse)
@@ -767,3 +772,28 @@ async def batch_upload_weighbills(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量上传失败: {str(e)}")
+
+
+@router.post("/batch-update-prices", summary="批量修改报单下磅单单价")
+async def batch_update_weighbill_prices(
+    request: BatchPriceUpdateRequest,
+    service: WeighbillService = Depends(get_weighbill_service),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    批量修改指定报单下多个品种的磅单单价。
+    - 每个品种对应的磅单必须已存在（通常报单创建时已生成占位磅单）
+    - 修改单价后自动重新计算总金额，并同步更新收款明细和结余明细
+    - 如果某个品种修改失败（如磅单不存在），会单独记录错误，不影响其他品种
+    """
+    try:
+        # 转换为服务层期望的格式
+        updates = [{"product_name": item.product_name, "unit_price": item.unit_price} for item in request.prices]
+        result = service.batch_update_unit_prices(
+            delivery_id=request.delivery_id,
+            price_updates=updates,
+            current_user=current_user
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量修改失败: {str(e)}")

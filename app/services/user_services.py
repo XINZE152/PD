@@ -495,7 +495,24 @@ class PermissionService:
     @classmethod
     def get_all_fields(cls):
         """获取所有权限字段名列表（动态）"""
-      @staticmethod
+        if cls._fields_cache is None:
+            cls._load_definitions()
+        return cls._fields_cache
+
+    @classmethod
+    def get_label(cls, field_name):
+        """获取指定权限字段的显示名称"""
+        if cls._labels_cache is None:
+            cls._load_definitions()
+        return cls._labels_cache.get(field_name, field_name)
+
+    @classmethod
+    def refresh_cache(cls):
+        """刷新缓存（在增删权限定义后调用）"""
+        cls._fields_cache = None
+        cls._labels_cache = None
+        cls._load_definitions()
+    @staticmethod
     def ensure_table_exists():
         """确保权限表、角色模板表、权限定义表存在"""
         # 原有代码不变，但需保证 pd_permission_definitions 已创建
@@ -570,9 +587,7 @@ class PermissionService:
                         INSERT INTO pd_role_templates (role, template_json) 
                         VALUES (%s, %s)
                     """, (role, json.dumps(full_perms)))
-                conn.commit()可选）
-                    },
-                }
+                conn.commit()
                 for role, perms in default_role_templates.items():
                     # 补齐所有字段（未在模板中定义的置0）
                     full_perms = {f: perms.get(f, 0) for f in PermissionService.get_all_fields()}

@@ -873,6 +873,76 @@ class WeighbillService:
             )
             return {"success": False, "error": str(e)}
 
+    def batch_update_unit_prices(
+            self,
+            delivery_id: int,
+            price_updates: List[Dict[str, Any]],
+            current_user: dict = None
+    ) -> Dict[str, Any]:
+        """
+        批量修改报单下各品种磅单的单价
+        :param delivery_id: 报单ID
+        :param price_updates: [{"product_name": "电动", "unit_price": 8500}, ...]
+        :param current_user: 当前用户信息
+        :return: 统计结果
+        """
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        for item in price_updates:
+            product_name = item.get("product_name")
+            new_price = item.get("unit_price")
+            if not product_name or new_price is None:
+                fail_count += 1
+                results.append({
+                    "product_name": product_name,
+                    "success": False,
+                    "error": "缺少品种名称或单价"
+                })
+                continue
+
+            try:
+                # 调用现有上传方法，只更新单价字段，不传图片
+                resp = self.upload_weighbill(
+                    delivery_id=delivery_id,
+                    product_name=product_name,
+                    data={"unit_price": new_price},
+                    image_file=None,
+                    current_user=current_user,
+                    is_manual=True
+                )
+                if resp.get("success"):
+                    success_count += 1
+                    results.append({
+                        "product_name": product_name,
+                        "success": True,
+                        "weighbill_id": resp["data"].get("weighbill_id"),
+                        "new_unit_price": new_price
+                    })
+                else:
+                    fail_count += 1
+                    results.append({
+                        "product_name": product_name,
+                        "success": False,
+                        "error": resp.get("error", "未知错误")
+                    })
+            except Exception as e:
+                fail_count += 1
+                results.append({
+                    "product_name": product_name,
+                    "success": False,
+                    "error": str(e)
+                })
+
+        return {
+            "success": True,
+            "delivery_id": delivery_id,
+            "total": len(price_updates),
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "details": results
+        }
     def batch_upload_weighbills(
             self,
             warehouse_name: str,
