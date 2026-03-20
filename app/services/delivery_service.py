@@ -64,6 +64,36 @@ class DeliveryService:
         normalized = re.sub(r"\s+", "", normalized).upper()
         return normalized
 
+    def _normalize_driver_id_card_with_warnings(self, value: Optional[Any]) -> tuple:
+        """
+        規範化身份證號，支持不全補0、位數過多截斷並輸出提示。
+        返回: (normalized_value, warnings_list)
+        """
+        warnings = []
+        if value is None:
+            return None, warnings
+
+        raw = str(value).strip()
+        if raw == "":
+            return None, warnings
+
+        normalized = re.sub(r"\s+", "", raw).upper()
+        digits = re.sub(r"[^\dX]", "", normalized)
+        if not digits:
+            return None, warnings
+
+        orig_len = len(digits)
+        if orig_len < 18:
+            normalized = digits + '0' * (18 - orig_len)
+            warnings.append(f"身份證號位數不足，已自動末尾補0補足18位（原{orig_len}位）")
+        elif orig_len > 18:
+            normalized = digits[:18]
+            warnings.append(f"身份證號位數過多，已截斷至18位（原{orig_len}位）")
+        else:
+            normalized = digits
+
+        return normalized, warnings
+
     def _normalize_has_delivery_order(self, value: Optional[str]) -> Optional[str]:
         """将联单状态统一为数据库可接受值：有/无。"""
         if value is None:
@@ -689,10 +719,10 @@ class DeliveryService:
         try:
             # ---------- 参数校验 ----------
             driver_phone = data.get('driver_phone')
-            driver_id_card = self._normalize_driver_id_card(data.get('driver_id_card'))
-            if driver_id_card and len(driver_id_card) > 18:
-                return {"success": False, "error": "司机身份证号长度不能超过18位"}
+            id_card_warnings = []
+            driver_id_card, id_card_warnings = self._normalize_driver_id_card_with_warnings(data.get('driver_id_card'))
             data['driver_id_card'] = driver_id_card
+            warnings = list(id_card_warnings)
 
             logger.info(f"【DEBUG】create_delivery 开始，data={data}, current_user={current_user}")
 
@@ -914,6 +944,7 @@ class DeliveryService:
             response_data = {
                 "success": True,
                 "message": "报货订单创建成功" + ("（合同最后一单）" if is_last_delivery else ""),
+                "warnings": warnings if warnings else [],
                 "data": {
                     "id": delivery_id,
                     "contract_no": contract_no,
@@ -1776,10 +1807,10 @@ class DeliveryService:
                                 "text": f"""请从以下报单文本中提取关键信息，以JSON格式返回：
                                 
             提取字段：
-            - vehicle_no: 车牌号（格式如豫U12345、京A88888等）
-            - driver_name: 司机姓名
+            - vehicle_no: 车牌号（标准7位，格式如豫U12345、京A88888，省简称+字母+5位）
+            - driver_name: 司机姓名（可为2字、3字、4字或更多，请完整识别勿截断）
             - driver_phone: 司机手机号（11位）
-            - driver_id_card: 身份证号（18位）
+            - driver_id_card: 身份证号（18位，末位可为数字或X）
             - product_name: 货物品种（如电动、黑皮、通信、摩托车、大白、牵引、AGM、EFB、电信、小四斤、管式等）
             - has_delivery_order: 是否有联单（有/无/需办）
             - target_factory_name: 目标工厂（金利、豫光、万洋、大华、金凤、南方、中原、华铂等）
@@ -1841,18 +1872,18 @@ class DeliveryService:
     def _clean_extracted_data(self, data: Dict) -> Dict:
         """清理和验证提取的数据"""
         result = {}
+        result['warnings'] = []
         
-        # 车牌号：提取第一个有效车牌
+        # 车牌号：标准7位（省简称+字母+5位），也支持新能源8位
         if data.get('vehicle_no'):
             plate = str(data['vehicle_no']).strip().upper()
-            # 基本车牌格式验证
-            if re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}', plate):
+            if re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}', plate):
                 result['vehicle_no'] = plate
         
-        # 司机姓名
+        # 司机姓名：支持2字、3字、4字或更多
         if data.get('driver_name'):
             name = str(data['driver_name']).strip()
-            if len(name) >= 2:
+            if len(name) >= 1 and re.match(r'^[\u4e00-\u9fa5a-zA-Z·]+$', name):
                 result['driver_name'] = name
         
         # 手机号
@@ -1861,11 +1892,12 @@ class DeliveryService:
             if len(phone) == 11 and phone.startswith(('13', '14', '15', '16', '17', '18', '19')):
                 result['driver_phone'] = phone
         
-        # 身份证号
+        # 身份证号：不全補0，位數過多截斷並提示
         if data.get('driver_id_card'):
-            id_card = str(data['driver_id_card']).strip().upper()
-            if re.match(r'^\d{17}[\dXx]$', id_card):
-                result['driver_id_card'] = id_card
+            normalized, card_warnings = self._normalize_driver_id_card_with_warnings(data['driver_id_card'])
+            if normalized:
+                result['driver_id_card'] = normalized
+                result['warnings'].extend(card_warnings)
         
         # ========== 修改：品种不做映射，保持原始提取值 ==========
         if data.get('product_name'):
@@ -1905,14 +1937,13 @@ class DeliveryService:
         
         if data.get('driver_id_card'):
             id_card = data['driver_id_card']
-            if not re.match(r'^\d{17}[\dXx]$', id_card):
-                data['driver_id_card_error'] = '身份证号格式不正确'
+            if len(id_card) != 18 or not re.match(r'^\d{17}[\dXx]$', id_card):
+                data['driver_id_card_error'] = '身份證號格式不正確（應為18位）'
         
         if data.get('vehicle_no'):
             plate = data['vehicle_no']
-            # 使用内联正则替代已删除的 LICENSE_PLATE_PATTERN
-            if not re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,6}', plate):
-                data['vehicle_no_error'] = '车牌号格式不正确'
+            if not re.match(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}', plate):
+                data['vehicle_no_error'] = '車牌號格式不正確（標準7位：省+字母+5位）'
         
         return {
             'is_valid': len(missing) == 0,
