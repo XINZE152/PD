@@ -534,14 +534,20 @@ class PaymentService:
 
                 try:
                     cur.execute("""
-                        SELECT arrival_payment_ratio, final_payment_ratio 
+                        SELECT prepayment_ratio, arrival_payment_ratio, final_payment_ratio 
                         FROM pd_contracts 
                         WHERE contract_no = %s
                     """, (contract_no,))
                     contract = cur.fetchone()
                     if contract:
-                        arrival_ratio = Decimal(str(contract['arrival_payment_ratio'] or 0.9))
-                        final_ratio = Decimal(str(contract['final_payment_ratio'] or 0.1))
+                        prepayment = contract.get('prepayment_ratio')
+                        if prepayment is not None and prepayment > 0:
+                            # 如果预付款比例存在且大于0，优先使用它
+                            arrival_ratio = Decimal(str(prepayment))
+                            final_ratio = Decimal('1') - arrival_ratio
+                        else:
+                            arrival_ratio = Decimal(str(contract.get('arrival_payment_ratio', 0.9)))
+                            final_ratio = Decimal(str(contract.get('final_payment_ratio', 0.1)))
                 except Exception as e:
                     logger.warning(f"获取合同比例失败，使用默认值: {e}")
 

@@ -253,13 +253,8 @@ class ContractService:
         contract_date = self._extract_contract_date(full_text)
         end_date = self._extract_end_date(full_text) or self._infer_end_date(contract_date)
         smelter = self._extract_smelter(full_text)
-
-        # 优先提取预付比例，若没有则使用到货款比例
         prepayment_ratio = self._extract_prepayment_ratio(full_text)
-        if prepayment_ratio:
-            arrival_ratio = prepayment_ratio
-        else:
-            arrival_ratio = self._extract_payment_ratio(full_text)
+        arrival_ratio = self._extract_payment_ratio(full_text)
 
         try:
             products, total_quantity = self._extract_products_multiline(text_lines)
@@ -291,6 +286,7 @@ class ContractService:
             "smelter_company": smelter,
             "total_quantity": float(total_quantity) if total_quantity else None,
             "truck_count": float(truck_count) if truck_count else None,
+            "prepayment_ratio": float(prepayment_ratio) if prepayment_ratio else None,
             "arrival_payment_ratio": float(arrival_ratio),
             "final_payment_ratio": float(final_ratio),
             "products": products if products else [],
@@ -617,9 +613,9 @@ class ContractService:
                     cur.execute("""
                         INSERT INTO pd_contracts 
                         (contract_no, contract_date, end_date, smelter_company, 
-                         total_quantity, truck_count, arrival_payment_ratio, final_payment_ratio,
+                         total_quantity, truck_count, prepayment_ratio, arrival_payment_ratio, final_payment_ratio,
                          contract_image_path, status, remarks)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         data.get("contract_no"),
                         data.get("contract_date"),
@@ -627,6 +623,7 @@ class ContractService:
                         data.get("smelter_company"),
                         data.get("total_quantity"),
                         data.get("truck_count"),
+                        data.get("prepayment_ratio", Decimal("0")),  # 新增，默认0
                         data.get("arrival_payment_ratio", Decimal("0.9")),
                         data.get("final_payment_ratio", Decimal("0.1")),
                         data.get("contract_image_path"),
@@ -718,8 +715,8 @@ class ContractService:
                     update_fields = []
                     params = []
                     fields = ["contract_no", "contract_date", "end_date", "smelter_company",
-                              "total_quantity", "truck_count", "arrival_payment_ratio", "final_payment_ratio",
-                              "status", "remarks", "contract_image_path"]
+                              "total_quantity", "truck_count", "prepayment_ratio", "arrival_payment_ratio",
+                              "final_payment_ratio", "status", "remarks", "contract_image_path"]
 
                     for field in fields:
                         if field in data:

@@ -44,6 +44,7 @@ class ContractOCRResponse(BaseModel):
     smelter_company: Optional[str] = None
     total_quantity: Optional[float] = None
     truck_count: Optional[float] = None
+    prepayment_ratio: Optional[float] = None
     arrival_payment_ratio: float = 0.9
     final_payment_ratio: float = 0.1
     products: List[ProductItem] = []
@@ -66,6 +67,7 @@ class ContractCreateRequest(BaseModel):
     end_date: Optional[str] = None
     smelter_company: Optional[str] = None
     total_quantity: Optional[float] = None
+    prepayment_ratio: Optional[float] = None
     arrival_payment_ratio: float = 0.9
     final_payment_ratio: float = 0.1
     products: List[ProductItem] = []
@@ -78,6 +80,7 @@ class ContractUpdateRequest(BaseModel):
     end_date: Optional[str] = None
     smelter_company: Optional[str] = None
     total_quantity: Optional[float] = None
+    prepayment_ratio: Optional[float] = None
     arrival_payment_ratio: Optional[float] = None
     final_payment_ratio: Optional[float] = None
     products: Optional[List[ProductItem]] = None
@@ -93,6 +96,7 @@ class ContractOut(BaseModel):
     smelter_company: Optional[str] = None
     total_quantity: Optional[float] = None
     truck_count: Optional[float] = None
+    prepayment_ratio: Optional[float] = None
     arrival_payment_ratio: float
     final_payment_ratio: float
     status: str
@@ -279,6 +283,7 @@ async def create_manual(
             "end_date": request.end_date,
             "smelter_company": request.smelter_company,
             "total_quantity": Decimal(str(request.total_quantity)) if request.total_quantity else None,
+            "prepayment_ratio": Decimal(str(request.prepayment_ratio)) if request.prepayment_ratio else Decimal("0"),
             "arrival_payment_ratio": Decimal(str(request.arrival_payment_ratio)),
             "final_payment_ratio": Decimal(str(request.final_payment_ratio)),
             "status": request.status,
@@ -438,6 +443,8 @@ async def update_contract(
                 data["smelter_company"] = request.smelter_company
             if request.total_quantity is not None:
                 data["total_quantity"] = Decimal(str(request.total_quantity))
+            if request.prepayment_ratio is not None:
+                data["prepayment_ratio"] = Decimal(str(request.prepayment_ratio))
             if request.arrival_payment_ratio is not None:
                 data["arrival_payment_ratio"] = Decimal(str(request.arrival_payment_ratio))
             if request.final_payment_ratio is not None:
