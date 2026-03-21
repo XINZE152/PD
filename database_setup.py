@@ -202,6 +202,23 @@ TABLE_STATEMENTS = [
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='销售台账/报货订单';
 	""",
 	"""
+	CREATE TABLE IF NOT EXISTS pd_delivery_plans (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+		plan_no VARCHAR(64) NOT NULL COMMENT '计划编号',
+		plan_start_date DATE NOT NULL COMMENT '计划开始日期',
+		planned_trucks INT NOT NULL DEFAULT 0 COMMENT '计划车数',
+		planned_tonnage DECIMAL(12, 3) NOT NULL DEFAULT 0.000 COMMENT '计划吨数',
+		plan_status VARCHAR(32) DEFAULT '草稿' COMMENT '计划状态',
+		confirmed_trucks INT NOT NULL DEFAULT 0 COMMENT '已定车数',
+		unconfirmed_trucks INT NOT NULL DEFAULT 0 COMMENT '未定车数',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+		UNIQUE KEY uk_plan_no (plan_no),
+		INDEX idx_plan_start_date (plan_start_date),
+		INDEX idx_plan_status (plan_status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='报货计划表';
+	""",
+	"""
 	CREATE TABLE IF NOT EXISTS pd_weighbills (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
 		weigh_date DATE COMMENT '磅单日期',
