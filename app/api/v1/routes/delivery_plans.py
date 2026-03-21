@@ -7,8 +7,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.services.delivery_plan_service import DeliveryPlanService, get_delivery_plan_service
+from core.auth import get_current_user
 
 router = APIRouter(prefix="/delivery-plans", tags=["报货计划"])
+
+
+def _operator_from_user(current_user: dict) -> tuple[Optional[int], Optional[str]]:
+    uid = current_user.get("id")
+    try:
+        op_id = int(uid) if uid is not None else None
+    except (TypeError, ValueError):
+        op_id = None
+    op_name = current_user.get("name") or current_user.get("account")
+    return op_id, op_name if op_name else None
 
 
 class DeliveryPlanProductItem(BaseModel):
@@ -67,11 +78,13 @@ def _items_to_service_payload(items: List[DeliveryPlanProductItem]) -> list[dict
 @router.post("/", summary="录入报货计划", response_model=dict)
 async def create_delivery_plan(
     request: DeliveryPlanCreateRequest,
+    current_user: dict = Depends(get_current_user),
     service: DeliveryPlanService = Depends(get_delivery_plan_service),
 ):
     payload = request.model_dump()
     payload["items"] = _items_to_service_payload(request.items)
-    result = service.create_plan(payload)
+    op_id, op_name = _operator_from_user(current_user)
+    result = service.create_plan(payload, operator_id=op_id, operator_name=op_name)
     if result.get("success"):
         return result
     err = result.get("error", "录入失败")
@@ -87,11 +100,15 @@ async def create_delivery_plan(
 )
 async def increment_confirmed_trucks(
     request: IncrementConfirmedTrucksRequest,
+    current_user: dict = Depends(get_current_user),
     service: DeliveryPlanService = Depends(get_delivery_plan_service),
 ):
+    op_id, op_name = _operator_from_user(current_user)
     result = service.increment_confirmed_trucks_by_plan_no(
         request.plan_no.strip(),
         request.truck_count,
+        operator_id=op_id,
+        operator_name=op_name,
     )
     if result.get("success"):
         return result
@@ -144,6 +161,7 @@ async def get_delivery_plan(
 async def update_delivery_plan(
     plan_id: int,
     request: DeliveryPlanUpdateRequest,
+    current_user: dict = Depends(get_current_user),
     service: DeliveryPlanService = Depends(get_delivery_plan_service),
 ):
     data = request.model_dump(exclude_unset=True)
@@ -153,7 +171,10 @@ async def update_delivery_plan(
             if request.items is not None
             else []
         )
-    result = service.update_plan(plan_id, data)
+    op_id, op_name = _operator_from_user(current_user)
+    result = service.update_plan(
+        plan_id, data, operator_id=op_id, operator_name=op_name
+    )
     if result.get("success"):
         return result
     err = result.get("error", "更新失败")

@@ -94,7 +94,8 @@ TABLE_STATEMENTS = [
 			'大区经理',
 			'自营库管理',
 			'财务',
-			'会计'
+			'会计',
+			'审核主管'
 		))
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 	""",
@@ -104,7 +105,7 @@ TABLE_STATEMENTS = [
 		user_id BIGINT NOT NULL COMMENT '用户ID（关联pd_users.id）',
 	
 		-- 角色字段（单选）
-		role VARCHAR(32) NOT NULL DEFAULT '会计' COMMENT '角色：管理员/大区经理/自营库管理/财务/会计',
+		role VARCHAR(32) NOT NULL DEFAULT '会计' COMMENT '角色：管理员/大区经理/自营库管理/财务/会计/审核主管',
 	
 		-- 权限字段（布尔值，1=有权限，0=无权限）
 		perm_permission_manage TINYINT DEFAULT 0 COMMENT '权限管理权限',
@@ -213,6 +214,10 @@ TABLE_STATEMENTS = [
 		plan_status VARCHAR(32) DEFAULT '生效中' COMMENT '计划状态',
 		confirmed_trucks INT NOT NULL DEFAULT 0 COMMENT '已定车数',
 		unconfirmed_trucks INT NOT NULL DEFAULT 0 COMMENT '未定车数',
+		created_by BIGINT DEFAULT NULL COMMENT '创建人用户ID',
+		created_by_name VARCHAR(64) DEFAULT NULL COMMENT '创建人姓名',
+		updated_by BIGINT DEFAULT NULL COMMENT '最后修改人用户ID',
+		updated_by_name VARCHAR(64) DEFAULT NULL COMMENT '最后修改人姓名',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 		UNIQUE KEY uk_plan_no (plan_no),
@@ -310,6 +315,22 @@ TABLE_STATEMENTS = [
 		INDEX idx_payee_name (payee_name),
 		INDEX idx_is_active (is_active)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收款人表';
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS pd_warehouse_payees (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+		warehouse_name VARCHAR(64) NOT NULL COMMENT '库房名称',
+		regional_manager VARCHAR(64) DEFAULT NULL COMMENT '大区经理',
+		payee_name VARCHAR(64) NOT NULL COMMENT '收款人姓名',
+		payee_account VARCHAR(32) NOT NULL COMMENT '收款账号',
+		payee_bank_name VARCHAR(64) DEFAULT NULL COMMENT '收款银行名称',
+		is_active TINYINT DEFAULT 1 COMMENT '是否启用：1=启用，0=停用',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+		INDEX idx_warehouse_name (warehouse_name),
+		INDEX idx_payee_name (payee_name),
+		INDEX idx_is_active (is_active)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='库房与收款人配置表';
 	""",
 	# ========== 新增合同管理表 ==========
 	"""
@@ -507,7 +528,21 @@ TABLE_STATEMENTS = [
 		INDEX idx_imported_at (imported_at),
 		INDEX idx_company_type (company_type)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回款Excel导入明细记录';
-"""
+	""",
+	"""
+	CREATE TABLE IF NOT EXISTS pd_payment_upload_logs (
+		id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+		original_filename VARCHAR(255) NOT NULL COMMENT '原始文件名',
+		saved_filename VARCHAR(255) NOT NULL COMMENT '保存文件名',
+		file_path VARCHAR(500) NOT NULL COMMENT '文件路径',
+		file_size BIGINT DEFAULT NULL COMMENT '文件大小(字节)',
+		remark VARCHAR(500) DEFAULT NULL COMMENT '备注',
+		uploaded_by BIGINT DEFAULT NULL COMMENT '上传人ID',
+		uploaded_by_name VARCHAR(64) DEFAULT NULL COMMENT '上传人姓名',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+		INDEX idx_created_at (created_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='回款文件上传日志';
+	""",
 ]
 
 def init_permission_definitions():

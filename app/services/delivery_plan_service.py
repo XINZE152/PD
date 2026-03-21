@@ -12,6 +12,48 @@ from app.services.contract_service import get_conn
 
 logger = logging.getLogger(__name__)
 
+_PLAN_AUDIT_COLS_ENSURED = False
+
+
+def _ensure_plan_audit_columns() -> None:
+    """旧库补全报货计划操作人相关字段（仅执行一次）。"""
+    global _PLAN_AUDIT_COLS_ENSURED
+    if _PLAN_AUDIT_COLS_ENSURED:
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pd_delivery_plans'
+                    """
+                )
+                existing = {row[0] for row in (cur.fetchall() or [])}
+                parts: list[str] = []
+                if "created_by" not in existing:
+                    parts.append(
+                        "ADD COLUMN created_by BIGINT DEFAULT NULL COMMENT '创建人用户ID'"
+                    )
+                if "created_by_name" not in existing:
+                    parts.append(
+                        "ADD COLUMN created_by_name VARCHAR(64) DEFAULT NULL COMMENT '创建人姓名'"
+                    )
+                if "updated_by" not in existing:
+                    parts.append(
+                        "ADD COLUMN updated_by BIGINT DEFAULT NULL COMMENT '最后修改人用户ID'"
+                    )
+                if "updated_by_name" not in existing:
+                    parts.append(
+                        "ADD COLUMN updated_by_name VARCHAR(64) DEFAULT NULL COMMENT '最后修改人姓名'"
+                    )
+                if parts:
+                    cur.execute("ALTER TABLE pd_delivery_plans " + ", ".join(parts))
+            conn.commit()
+        _PLAN_AUDIT_COLS_ENSURED = True
+    except Exception as e:
+        logger.warning("ensure_plan_audit_columns skipped/failed: %s", e)
+
 
 def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(row)
@@ -79,16 +121,25 @@ def _fetch_products_for_plan_ids(cur, plan_ids: List[int]) -> Dict[int, List[Dic
 class DeliveryPlanService:
     _PLAN_SELECT = """
         id, plan_no, smelter_name, plan_name, plan_start_date, planned_trucks, planned_tonnage,
-        plan_status, confirmed_trucks, unconfirmed_trucks, created_at, updated_at
+        plan_status, confirmed_trucks, unconfirmed_trucks,
+        created_by, created_by_name, updated_by, updated_by_name,
+        created_at, updated_at
     """
 
-    def create_plan(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def create_plan(
+        self,
+        data: Dict[str, Any],
+        *,
+        operator_id: Optional[int] = None,
+        operator_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         items_raw = data.get("items") or []
         try:
             rows_to_insert = _normalize_items(items_raw)
         except ValueError as e:
             return {"success": False, "error": str(e)}
 
+        _ensure_plan_audit_columns()
         try:
             with get_conn() as conn:
                 prev_ac = conn.get_autocommit()
@@ -100,8 +151,9 @@ class DeliveryPlanService:
                             """
                             INSERT INTO pd_delivery_plans (
                                 plan_no, smelter_name, plan_name, plan_start_date, planned_trucks, planned_tonnage,
-                                plan_status, confirmed_trucks, unconfirmed_trucks
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                plan_status, confirmed_trucks, unconfirmed_trucks,
+                                created_by, created_by_name, updated_by, updated_by_name
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 data["plan_no"],
@@ -113,6 +165,10 @@ class DeliveryPlanService:
                                 data.get("plan_status") or "生效中",
                                 int(data.get("confirmed_trucks", 0)),
                                 int(data.get("unconfirmed_trucks", 0)),
+                                operator_id,
+                                operator_name,
+                                operator_id,
+                                operator_name,
                             ),
                         )
                         plan_id = cur.lastrowid
@@ -147,10 +203,16 @@ class DeliveryPlanService:
             return {"success": False, "error": err}
 
     def increment_confirmed_trucks_by_plan_no(
-        self, plan_no: str, truck_count: int
+        self,
+        plan_no: str,
+        truck_count: int,
+        *,
+        operator_id: Optional[int] = None,
+        operator_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         if truck_count < 1:
             return {"success": False, "error": "车数须为正整数"}
+        _ensure_plan_audit_columns()
         try:
             with get_conn() as conn:
                 with conn.cursor(DictCursor) as cur:
@@ -158,10 +220,12 @@ class DeliveryPlanService:
                         """
                         UPDATE pd_delivery_plans
                         SET confirmed_trucks = confirmed_trucks + %s,
-                            unconfirmed_trucks = GREATEST(0, planned_trucks - confirmed_trucks - %s)
+                            unconfirmed_trucks = GREATEST(0, planned_trucks - confirmed_trucks - %s),
+                            updated_by = %s,
+                            updated_by_name = %s
                         WHERE plan_no = %s
                         """,
-                        (truck_count, truck_count, plan_no),
+                        (truck_count, truck_count, operator_id, operator_name, plan_no),
                     )
                     if cur.rowcount == 0:
                         return {"success": False, "error": f"报货计划编号不存在: {plan_no}"}
@@ -186,6 +250,7 @@ class DeliveryPlanService:
             return {"success": False, "error": str(e)}
 
     def get_plan(self, plan_id: int) -> Dict[str, Any]:
+        _ensure_plan_audit_columns()
         try:
             with get_conn() as conn:
                 with conn.cursor(DictCursor) as cur:
@@ -214,6 +279,7 @@ class DeliveryPlanService:
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
+        _ensure_plan_audit_columns()
         try:
             with get_conn() as conn:
                 with conn.cursor(DictCursor) as cur:
@@ -276,7 +342,14 @@ class DeliveryPlanService:
             logger.error("list delivery plans failed: %s", e)
             return {"success": False, "error": str(e)}
 
-    def update_plan(self, plan_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_plan(
+        self,
+        plan_id: int,
+        data: Dict[str, Any],
+        *,
+        operator_id: Optional[int] = None,
+        operator_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         allowed = {
             "plan_no",
             "smelter_name",
@@ -301,6 +374,7 @@ class DeliveryPlanService:
         except ValueError as e:
             return {"success": False, "error": str(e)}
 
+        _ensure_plan_audit_columns()
         try:
             with get_conn() as conn:
                 prev_ac = conn.get_autocommit()
@@ -318,6 +392,11 @@ class DeliveryPlanService:
                             if field in raw and raw[field] is not None:
                                 update_fields.append(f"{field} = %s")
                                 params.append(raw[field])
+
+                        will_touch = bool(update_fields) or rows_to_insert is not None
+                        if will_touch and (operator_id is not None or operator_name is not None):
+                            update_fields.extend(["updated_by = %s", "updated_by_name = %s"])
+                            params.extend([operator_id, operator_name])
 
                         if update_fields:
                             params.append(plan_id)
