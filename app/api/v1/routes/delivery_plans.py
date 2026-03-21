@@ -21,6 +21,11 @@ class DeliveryPlanCreateRequest(BaseModel):
     unconfirmed_trucks: int = Field(0, ge=0, description="未定车数")
 
 
+class IncrementConfirmedTrucksRequest(BaseModel):
+    plan_no: str = Field(..., min_length=1, description="报货计划编号", max_length=64)
+    truck_count: int = Field(..., ge=1, description="本次累加车数（累加到已定车数）")
+
+
 class DeliveryPlanUpdateRequest(BaseModel):
     plan_no: Optional[str] = Field(None, description="计划编号", max_length=64)
     plan_start_date: Optional[str] = Field(None, description="计划开始日期 YYYY-MM-DD")
@@ -42,6 +47,31 @@ async def create_delivery_plan(
     err = result.get("error", "录入失败")
     if "计划编号已存在" in str(err):
         raise HTTPException(status_code=400, detail=err)
+    raise HTTPException(status_code=400, detail=err)
+
+
+@router.post(
+    "/increment-confirmed-trucks",
+    summary="累加已定车数并重算未定车数",
+    response_model=dict,
+)
+async def increment_confirmed_trucks(
+    request: IncrementConfirmedTrucksRequest,
+    service: DeliveryPlanService = Depends(get_delivery_plan_service),
+):
+    """
+    按计划编号将 `truck_count` 累加到已定车数；
+    未定车数 = max(0, 计划车数 - 累加后的已定车数)（已定可大于计划，此时未定车数为 0）。
+    """
+    result = service.increment_confirmed_trucks_by_plan_no(
+        request.plan_no.strip(),
+        request.truck_count,
+    )
+    if result.get("success"):
+        return result
+    err = result.get("error", "更新失败")
+    if "不存在" in str(err):
+        raise HTTPException(status_code=404, detail=err)
     raise HTTPException(status_code=400, detail=err)
 
 

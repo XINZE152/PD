@@ -57,6 +57,47 @@ class DeliveryPlanService:
                 return {"success": False, "error": "计划编号已存在"}
             return {"success": False, "error": err}
 
+    def increment_confirmed_trucks_by_plan_no(
+        self, plan_no: str, truck_count: int
+    ) -> Dict[str, Any]:
+        """按计划编号将车数累加到已定车数，并重算未定车数（计划车数 - 新已定，下限为 0）。"""
+        if truck_count < 1:
+            return {"success": False, "error": "车数须为正整数"}
+        try:
+            with get_conn() as conn:
+                with conn.cursor(DictCursor) as cur:
+                    cur.execute(
+                        """
+                        UPDATE pd_delivery_plans
+                        SET confirmed_trucks = confirmed_trucks + %s,
+                            unconfirmed_trucks = GREATEST(0, planned_trucks - confirmed_trucks - %s)
+                        WHERE plan_no = %s
+                        """,
+                        (truck_count, truck_count, plan_no),
+                    )
+                    if cur.rowcount == 0:
+                        return {"success": False, "error": f"报货计划编号不存在: {plan_no}"}
+                    conn.commit()
+                    cur.execute(
+                        """
+                        SELECT id, plan_no, plan_start_date, planned_trucks, planned_tonnage,
+                               plan_status, confirmed_trucks, unconfirmed_trucks,
+                               created_at, updated_at
+                        FROM pd_delivery_plans
+                        WHERE plan_no = %s
+                        """,
+                        (plan_no,),
+                    )
+                    row = cur.fetchone()
+                    return {
+                        "success": True,
+                        "message": "已定/未定车数已更新",
+                        "data": _serialize_row(row) if row else {},
+                    }
+        except Exception as e:
+            logger.error("increment confirmed trucks failed: %s", e)
+            return {"success": False, "error": str(e)}
+
     def list_plans(
         self,
         plan_no: Optional[str] = None,
