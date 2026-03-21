@@ -1,6 +1,8 @@
-# PD FastAPI Starter
+# PD 采购配送管理 API
 
 [![wakatime](https://wakatime.com/badge/user/d46234d8-e044-4d0d-b6d9-2789ecdaca27/project/c10939fa-88e9-4557-b299-db1defe6618b.svg)](https://wakatime.com/badge/user/d46234d8-e044-4d0d-b6d9-2789ecdaca27/project/c10939fa-88e9-4557-b299-db1defe6618b)
+
+基于 **FastAPI** 的后端：合同 OCR、客户与库房收款配置、销售报货、**报货计划**、订货计划、磅单、结余核销、收款明细与回款导入等。详见 `pyproject.toml` 中的依赖说明。
 
 ## 快速开始
 
@@ -21,15 +23,13 @@ uv venv
 
 ```bash
 uv sync
-# 如使用 EmailStr 字段，请确保安装 email-validator
-uv add email-validator
 ```
 
-合同 OCR、磅单等能力依赖 `rapidocr-onnxruntime`、`opencv-contrib-python` 等（见 `pyproject.toml`）。若未安装相关包，与合同 OCR 相关的模块可能无法在导入阶段加载。
+合同 OCR、磅单等依赖 `rapidocr-onnxruntime`、`opencv-contrib-python` 等（已在 `pyproject.toml` 中声明）。`email-validator` 等常用包也已列入依赖；若本地环境缺包，以 `uv sync` 为准补齐。
 
 ### 3) 配置环境变量
 
-推荐使用 `.env`。**应用运行时通过 PyMySQL 连接数据库，实际读取的是下列 `MYSQL_*` 变量**（与 `database_setup.py` 一致）。`app/core/config.py` 中的 `DATABASE_URL` 目前主要用于配置项占位，**请勿只配 `DATABASE_URL` 而省略 `MYSQL_*`**。
+推荐使用 `.env`。**应用通过 PyMySQL 连接数据库时读取的是 `MYSQL_*` 变量**（与 `database_setup.py` 一致）。`DATABASE_URL` 在 `app/core/config.py` 中主要为占位，**请勿只配置 `DATABASE_URL` 而省略 `MYSQL_*`**。
 
 ```
 APP_NAME=PD API
@@ -39,12 +39,15 @@ JWT_ALGORITHM=HS256
 MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3306
 MYSQL_USER=root
-MYSQL_PASSWORD=123456
+MYSQL_PASSWORD=你的密码
 MYSQL_DATABASE=PD_db
 MYSQL_CHARSET=utf8mb4
 
-# 监听端口（main.py 使用，默认 8007）
+# 监听端口（main.py 默认 8007）
 PORT=8007
+
+# 可选：OpenAI（若使用相关能力）
+# OPENAI_API_KEY=
 
 # 可选：逗号分隔，默认 *
 # CORS_ALLOW_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
@@ -54,59 +57,57 @@ PORT=8007
 # LOG_LEVEL=INFO
 ```
 
-### 4) 初始化/同步数据库表结构
+### 4) 初始化 / 同步数据库表结构
 
 ```bash
-# 一次性创建基础表（或补齐缺失索引/列）
 python database_setup.py
 ```
+
+`database_setup.py` 会创建（若不存在）核心业务表，例如：`pd_users`、`pd_user_permissions`、`pd_contracts`、`pd_deliveries`、`pd_delivery_plans`（含 **创建人 / 最后修改人** 字段：`created_by`、`created_by_name`、`updated_by`、`updated_by_name`）、`pd_weighbills`、`pd_balance_details`、`pd_payment_details`、`pd_warehouse_payees`、`pd_payment_upload_logs`、固定 50 槽位 `pd_product_categories` 等，并初始化权限定义数据。
+
+- **全新库**：直接执行上述命令或依赖应用启动时的 `create_tables()` 即可。
+- **已有库**：若曾早于某次迭代建库，报货计划相关能力会在首次调用服务时尝试自动 `ALTER TABLE pd_delivery_plans` 补全操作人字段；若无 DDL 权限，需由 DBA 按 `database_setup.py` 中的定义手工补列。
 
 ### 5) 运行应用
 
 ```bash
-# 快速运行（开发环境，含热重载）
+# 开发环境（热重载）
 uv run main.py
 
-# 或直接使用 uvicorn
+# 或
 uvicorn main:app --reload --host 0.0.0.0 --port 8007
 ```
 
+实际端口以环境变量 `PORT` 为准（未设置时默认为 **8007**）。
+
 ### 6) 访问地址
 
-默认端口以环境变量 `PORT` 为准（未设置时为 `8007`）：
-
-- Swagger 文档: http://127.0.0.1:8007/docs
+- Swagger 文档: `http://127.0.0.1:<PORT>/docs`（将 `<PORT>` 换成你的 `PORT`）
 
 ## 应用行为摘要
 
-- **启动时**：会执行 `create_tables()` 做表结构检查/创建，并启动定时任务（默认每天 00:10，上海时区）将到期合同批量标记为「已失效」（宽限逻辑见 `expire_contracts_after_grace`）。
+- **启动时**：执行 `create_tables()` 检查/创建表；并启动定时任务（默认每天 00:10，上海时区）将到期合同批量标记为「已失效」（宽限逻辑见 `expire_contracts_after_grace`）。
 - **鉴权**：见下文「接口鉴权说明」。
+- **用户角色**：库表约束与业务侧一致的角色包括：**管理员**、**大区经理**、**自营库管理**、**财务**、**会计**、**审核主管**（枚举见 `database_setup.py` 中 `pd_users` 的 `CHECK`，前端可选 `GET /api/v1/user/roles`）。
 
-## API 详细说明
+## API 说明概要
+
+以下路径均挂在 **`/api/v1`** 下；完整参数与响应以 **`/docs`** 为准。
 
 ### 通用
 
 - `GET /healthz`：健康检查。
-- `GET /init-db`：手动触发数据库初始化（**仅建议开发/调试使用，生产环境应关闭或加保护**）。
+- `GET /init-db`：手动触发数据库初始化（**仅建议开发/调试；生产勿对公网开放**）。
 
-### 用户与权限（PD 用户体系，前缀 `/api/v1/user`）
+### 用户与权限（前缀 `/api/v1/user`）
 
-登录成功后，需要携带请求头：`Authorization: Bearer <token>`。
+登录成功后携带：`Authorization: Bearer <token>`。
 
-- `POST /api/v1/user/auth/login`：登录，校验账号密码并返回 JWT。
-- `POST /api/v1/user/auth/logout`：登出（需有效 Token；前端仍应清除本地 Token）。
-- `POST /api/v1/user/auth/refresh`：刷新访问令牌（需有效 Token）。
-- `GET /api/v1/user/me`：当前用户信息。
-- `PUT /api/v1/user/me`：更新当前用户资料（不含角色）。
-- `PUT /api/v1/user/me/password`：修改当前用户密码。
-- `POST /api/v1/user/users`：创建用户（管理员/大区经理）。
-- `GET /api/v1/user/users`：用户列表（分页/筛选，管理员/大区经理）。
-- `GET /api/v1/user/users/{user_id}`：用户详情。
-- `PUT /api/v1/user/users/{user_id}`：更新用户。
-- `DELETE /api/v1/user/users/{user_id}`：软删除用户。
-- `POST /api/v1/user/users/{user_id}/reset-password`：管理员重置密码（具体约束见接口实现）。
-
-权限相关子路由（若已启用）见 `/docs` 中 **用户认证与权限** 分组。
+- `POST /api/v1/user/auth/login`、`POST /api/v1/user/auth/logout`、`POST /api/v1/user/auth/refresh`：登录与令牌。
+- `GET /api/v1/user/me`、`PUT /api/v1/user/me`、`PUT /api/v1/user/me/password`：当前用户资料与改密。
+- `GET /api/v1/user/roles`：系统预置角色列表（含 **审核主管** 等）。
+- `POST /api/v1/user/users`、`GET /api/v1/user/users`、`GET/PUT/DELETE /api/v1/user/users/{id}`、`POST /api/v1/user/users/{id}/reset-password`：用户管理（权限约束见路由实现与 `/docs`）。
+- 权限矩阵、角色模板等见 `/docs` 中 **用户认证与权限** 分组。
 
 ### 合同管理（`/api/v1/contracts`）
 
@@ -121,71 +122,56 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8007
 
 ### 客户管理（`/api/v1/customers`）
 
-- `POST /api/v1/customers`：创建客户。
-- `GET /api/v1/customers`：列表。
-- `GET /api/v1/customers/{customer_id}`：详情。
-- `PUT /api/v1/customers/{customer_id}`：更新。
-- `DELETE /api/v1/customers/{customer_id}`：删除。
+- 冶炼厂客户的增删改查。
+- `GET/POST /api/v1/customers/warehouse-payees`、`PUT /api/v1/customers/warehouse-payees/{id}`：库房收款员配置（与业务里 `pd_warehouse_payees` / `pd_payees` 等逻辑配合使用，细节以代码与 `/docs` 为准）。
 
-### 销售台账/报货订单（`/api/v1/deliveries`）
+### 销售台账 / 报货订单（`/api/v1/deliveries`）
 
-- `POST /api/v1/deliveries`：新增报货订单/销售台账。
-- `GET /api/v1/deliveries`：列表。
-- `GET /api/v1/deliveries/{delivery_id}`：单条详情。
-- `GET /api/v1/deliveries/{delivery_id}/image`：预览联单图片。
-- `PUT /api/v1/deliveries/{delivery_id}`：更新。
-- `DELETE /api/v1/deliveries/{delivery_id}`：删除。
-- `POST /api/v1/deliveries/{delivery_id}/upload-order`：上传报货单附件。
+- 报货单的增删改查、联单上传、审核相关能力（部分接口需登录，见 `/docs`）。
+
+### 报货计划（`/api/v1/delivery-plans`）
+
+- `POST /api/v1/delivery-plans/`：**录入**（**需登录**）；写入 `created_by` / `created_by_name`，并将 `updated_by` / `updated_by_name` 设为同一操作人。
+- `GET /api/v1/delivery-plans/`：分页列表（支持计划编号、状态、冶炼厂、计划开始日期区间等筛选）。
+- `GET /api/v1/delivery-plans/{plan_id}`：详情（含品类单价明细；响应中含操作人字段）。
+- `PUT /api/v1/delivery-plans/{plan_id}`：**修改**（**需登录**）；更新主表或替换 `items` 时写入 **最后修改人**。
+- `DELETE /api/v1/delivery-plans/{plan_id}`：删除（当前实现未强制 JWT，生产建议收紧）。
+- `POST /api/v1/delivery-plans/increment-confirmed-trucks`：按 `plan_no` 累加已定车数并重算未定车数（**需登录**）；同时更新最后修改人。
 
 ### 订货计划（`/api/v1/order-plans`）
 
-- `POST /api/v1/order-plans/`：录入（需登录）； body：`plan_no`（报货计划编号）、`truck_count`；自动带入报货计划的冶炼厂；审核状态默认「待审核」。
-- `GET /api/v1/order-plans/`：分页列表；支持 `audit_status`、`plan_no`、`smelter_name`、`operator_name`、`updated_from`、`updated_to` 等查询参数。
-- `GET /api/v1/order-plans/{id}`：详情。
-- `PATCH /api/v1/order-plans/{id}/truck-count`：仅改车数（需登录）；非「会计」角色修改后状态重置为「待审核」，「会计」不改状态。
-- `POST /api/v1/order-plans/{id}/audit`：审核（需登录）； body：`audit_result` 为「审核通过」或「审核未通过」，可选 `remark`。仅「待审核」可审；**通过**时按本条 `truck_count` 调用与 `POST /delivery-plans/increment-confirmed-trucks` 相同的累加规则更新报货计划的 `confirmed_trucks` / `unconfirmed_trucks`（`truck_count` 为 0 时不改报货计划；已定车数可超过计划车数，此时未定车数为 0）。
+- 录入、列表、详情、改车数、审核；审核通过与报货计划已定车数联动（与 `increment-confirmed-trucks` 规则一致，详见 `/docs` 与该模块说明）。
 
 ### 磅单管理（`/api/v1/weighbills`）
 
-- `POST /api/v1/weighbills/ocr`：上传磅单图片并 OCR。
-- `POST /api/v1/weighbills/create`：新增磅单（按品种上传）。
-- `GET /api/v1/weighbills`：列表。
-- `GET /api/v1/weighbills/{bill_id}`：详情。
-- `GET /api/v1/weighbills/{bill_id}/image`：预览图片。
-- `PUT /api/v1/weighbills/modify`：更新磅单（含图片）。
-- `DELETE /api/v1/weighbills/{bill_id}`：删除。
-- `POST /api/v1/weighbills/{bill_id}/confirm`：确认/锁定。
-- `GET /api/v1/weighbills/match/delivery`：匹配磅单与报货订单。
-- `GET /api/v1/weighbills/contract/price`：按合同查价格信息。
+- OCR、创建、列表、详情、图片、修改、删除、确认、与报货匹配、按合同查价等。
 
-### 磅单结余 / 支付回单（`/api/v1/balances` 等）
+### 磅单结余 / 收款（`/api/v1/balances`、`/api/v1/payment` 等）
 
-- 磅单上传/修改成功后可自动生成结余明细；也可手动 `POST /api/v1/balances/generate`（以实际路由为准）。
-- 支付回单、结余核销等完整列表见 http://127.0.0.1:8007/docs 中 **磅单结余管理**、**收款明细管理** 等分组。
+- 结余生成、支付回单、收款明细、回款导入与上传日志等；完整列表见 `/docs` 中 **磅单结余管理**、**收款明细管理** 等分组。
 
 ### 品类管理（`/api/v1/product-categories`）
 
-- `GET /api/v1/product-categories/`：查询固定 50 槽位品类列表。
-- `POST /api/v1/product-categories/`：新增品类（写入第一个空槽位）。
-- `DELETE /api/v1/product-categories/`：按名称删除品类（槽位置空）。
+- 固定 50 槽位品类的查询、写入与按名删除。
 
 ## 接口鉴权说明（当前实现）
 
-- **已挂载**：`main.py` 中通过 `register_pd_auth_routes` 注册了 `/api/v1/user` 下的登录与用户管理路由；业务 API 挂载在 `/api/v1` 下。
-- **全局 `HTTPBearer(auto_error=False)`** 不会自动拒绝未带 Token 的请求；**是否必须登录取决于各路由是否声明 `Depends(get_current_user)`**。
-- **当前大致情况**（以代码为准，迭代后请以 `/docs` 为准）：
-  - **报货 `deliveries`、收款 `payment`、磅单 `weighbills` 中部分接口**已使用 JWT 校验当前用户。
-  - **合同 `contracts`、客户 `customers`、结余 `balances`、品类 `product_categories` 等多数接口**当前未统一强制 Token，**存在匿名可调用的风险**。
-- 生产环境建议：在网关层统一鉴权，或逐步为上述路由补上 `get_current_user` 与角色/权限校验。
+- **挂载方式**：`main.py` 中为 `/api/v1` 挂载了 `HTTPBearer(auto_error=False)`；`register_pd_auth_routes` 注册 `/api/v1/user` 下认证与用户管理路由。
+- **是否必须登录**：由各路由是否声明 `Depends(get_current_user)` 决定（**以代码与 `/docs` 为准**）。
+- **已强制登录的典型能力**（会持续迭代，以下非穷尽）：
+  - **报货计划**：`POST /api/v1/delivery-plans/`、`PUT /api/v1/delivery-plans/{plan_id}`、`POST /api/v1/delivery-plans/increment-confirmed-trucks`。
+  - **报货、收款、磅单**等模块中的部分写操作与敏感读操作。
+- **仍可能匿名访问的接口**：如部分合同/客户/结余/品类、报货计划列表与详情/删除等；**生产环境**建议在网关统一鉴权，或逐步为这些路由补上登录与权限校验。
 
 ## 安全性说明
 
-- **务必修改 `JWT_SECRET`**，勿使用示例默认值。
+- **务必修改 `JWT_SECRET`**，勿使用示例或仓库中的默认值。
 - **`GET /init-db` 无鉴权**，勿对公网开放。
 - **业务接口鉴权未全覆盖**，见上一节。
-- 用户体系中若存在「重置密码 / 管理密钥」类参数，部署时需通过环境变量或密钥管理妥善配置，勿提交到仓库。
+- 密钥与生产配置勿提交到版本库。
 
 ## 开发与架构备注
 
-- 数据库连接：`core/database.py` 的 `get_conn()` 使用 `DictCursor`；部分历史代码从 `contract_service` 引入另一套 `get_conn()`（默认游标），行为略有差异，后续可考虑统一到单一入口。
-- 请求日志中间件会为日志注入当前用户上下文；若需审计对齐用户维度，可关注相关实现是否在记录前重置了上下文（见 `main.py` 中 `request_logger`）。
+- 数据库连接：`core/database.py` 的 `get_conn()` 使用 `DictCursor`；部分模块仍从 `contract_service` 等引入另一套 `get_conn()`（默认游标），行为略有差异，后续可考虑统一。
+- 报货计划：`app/services/delivery_plan_service.py` 在首次访问时会对旧库尝试补全 `pd_delivery_plans` 上的操作人相关列（见 `_ensure_plan_audit_columns`）。
+- 请求日志中间件会注入当前用户上下文（见 `main.py` 中 `request_logger` 与 `get_user_identity_from_authorization`）。
