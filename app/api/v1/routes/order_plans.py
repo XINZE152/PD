@@ -1,5 +1,5 @@
 """
-订货计划：录入、列表筛选、仅修改车数（非会计改车数后状态回退为待审核）、审核
+订货计划：录入、列表筛选、仅修改车数（非审核主管改车数后状态回退为待审核）、审核
 """
 from typing import Literal, Optional
 
@@ -146,7 +146,7 @@ async def get_order_plan(
 
 @router.patch(
     "/{order_plan_id}/truck-count",
-    summary="仅修改车数（非会计角色修改后审核状态变为待审核；会计不改状态）",
+    summary="仅修改车数（非审核主管角色修改后审核状态变为待审核；审核主管不改状态）",
     response_model=dict,
 )
 async def patch_order_plan_truck_count(
