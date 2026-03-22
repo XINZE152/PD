@@ -1351,9 +1351,9 @@ class WeighbillService:
                             weighbill_where.append("pd.collection_status = %s")
                             weighbill_params.append(exact_collection_status)
 
-                    # 列表只返回审核通过的磅单
+                    # 列表返回待审核和审核通过的磅单（排除审核未通过），便于新增/修改后同步展示
                     if self._has_weighbill_audit_columns():
-                        weighbill_where.append("w.audit_status = '审核通过'")
+                        weighbill_where.append("(w.audit_status IN ('待审核', '审核通过') OR w.audit_status IS NULL)")
 
                     weighbill_sql = " AND ".join(weighbill_where)
 
