@@ -487,16 +487,19 @@ class WeighbillService:
             return {"success": False, "error": str(e)}
 
     def _get_payee_by_id(self, payee_id: int) -> Optional[Dict]:
-        """根据ID获取收款人详情（新表结构）"""
+        """根据 ID 获取收款人（与 /user/payees 列表一致：LEFT JOIN 库房，未绑库房的收款人仍有效）。"""
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT p.*, w.warehouse_name
                         FROM pd_payees p
-                        JOIN pd_warehouses w ON p.warehouse_id = w.id
-                        WHERE p.id = %s
-                    """, (payee_id,))
+                        LEFT JOIN pd_warehouses w ON p.warehouse_id = w.id
+                        WHERE p.id = %s AND p.is_active = 1
+                        """,
+                        (payee_id,),
+                    )
                     row = cur.fetchone()
                     if row:
                         columns = [desc[0] for desc in cur.description]
@@ -1013,10 +1016,11 @@ class WeighbillService:
         if not payee_info:
             return {
                 "success": False,
-                "error": f"收款人ID {payee_id} 不存在"
+                "error": f"收款人ID {payee_id} 不存在或已停用"
             }
-        
-        if payee_info.get("warehouse_name") != warehouse_name:
+
+        pw = payee_info.get("warehouse_name")
+        if pw is not None and str(pw).strip() and str(pw).strip() != str(warehouse_name).strip():
             return {
                 "success": False,
                 "error": f"收款人ID {payee_id} 不属于库房 '{warehouse_name}'"

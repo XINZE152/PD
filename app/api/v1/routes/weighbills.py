@@ -11,12 +11,20 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core.paths import TEMP_UPLOADS_DIR
+from app.core.logging import get_logger
 from app.services.weighbill_service import WeighbillService, get_weighbill_service
 from app.services.contract_service import get_conn
 from core.auth import get_current_user
 
 router = APIRouter(prefix="/weighbills", tags=["磅单管理"])
 logger = logging.getLogger(__name__)
+_app_access_logger = get_logger("app")
+
+
+def _reject_weighbill_create(detail: str) -> None:
+    """400 时写入 app.log，便于与 access 行对照排查（原请求日志不含 detail）。"""
+    _app_access_logger.info("weighbills/create 400 detail=%s", detail)
+    raise HTTPException(status_code=400, detail=detail)
 
 # ============ 请求/响应模型 ============
 
@@ -243,9 +251,8 @@ async def upload_weighbill(
     final_payee = payee
     
     if not final_warehouse and not final_payee and not payee_id:
-        raise HTTPException(
-            status_code=400, 
-            detail="必须指定库房(warehouse_name/warehouse)或收款人(payee/payee_id)至少一项"
+        _reject_weighbill_create(
+            "必须指定库房(warehouse_name/warehouse)或收款人(payee/payee_id)至少一项"
         )
     
     # 如果指定了库房，验证库房是否存在
@@ -257,25 +264,20 @@ async def upload_weighbill(
                     WHERE warehouse_name = %s AND is_active = 1
                 """, (final_warehouse,))
                 if not cur.fetchone():
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"库房 '{final_warehouse}' 不存在或已停用"
-                    )
+                    _reject_weighbill_create(f"库房 '{final_warehouse}' 不存在或已停用")
     
     # 如果指定了payee_id，验证收款人是否存在
     if payee_id:
         payee_info = service._get_payee_by_id(payee_id)
         if not payee_info:
-            raise HTTPException(
-                status_code=400,
-                detail=f"收款人ID {payee_id} 不存在"
-            )
-        # 如果同时指定了库房，验证收款人是否属于该库房
-        if final_warehouse and payee_info.get('warehouse_name') != final_warehouse:
-            raise HTTPException(
-                status_code=400,
-                detail=f"收款人ID {payee_id} 不属于库房 '{final_warehouse}'"
-            )
+            _reject_weighbill_create(f"收款人ID {payee_id} 不存在或已停用")
+        # 仅当收款人已绑定库房名称时，才要求与本次提交的库房一致（未绑库房的收款人允许搭配任意有效库房）
+        pw = payee_info.get("warehouse_name")
+        if final_warehouse and pw is not None and str(pw).strip():
+            if str(pw).strip() != str(final_warehouse).strip():
+                _reject_weighbill_create(
+                    f"收款人ID {payee_id} 不属于库房 '{final_warehouse}'"
+                )
     # ========== 校验结束 ==========
     """上传磅单（按品种上传）"""
     try:
@@ -378,16 +380,14 @@ async def upload_weighbill(
             
             return result
         else:
-            logger.warning(
-                "upload_weighbill request rejected delivery_id=%s product_name=%s weigh_date=%s contract_no=%s vehicle_no=%s error=%s",
+            err_msg = result.get("error") or "上传失败"
+            _app_access_logger.info(
+                "weighbills/create 400 delivery_id=%s product=%s error=%s",
                 delivery_id,
                 product_name,
-                weigh_date,
-                contract_no,
-                vehicle_no,
-                result.get("error"),
+                err_msg,
             )
-            raise HTTPException(status_code=400, detail=result.get("error"))
+            raise HTTPException(status_code=400, detail=err_msg)
 
     except HTTPException:
         raise
