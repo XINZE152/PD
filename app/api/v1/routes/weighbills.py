@@ -115,6 +115,9 @@ class WeighbillOut(BaseModel):
     payee: Optional[str] = None
     service_fee: Optional[float] = None
     operations: Optional[dict] = None
+    # 磅单审核
+    audit_status: Optional[str] = Field(None, description="磅单审核状态：待审核/审核通过/审核未通过")
+    audit_remark: Optional[str] = Field(None, description="审核备注")
     # 新增计算字段
     payable_unit_price: Optional[float] = Field(None, description="应付单价 = 合同单价/1.048")
     payable_amount_calculated: Optional[float] = Field(None, description="应付金额 = 应付单价*净重-联单费")
@@ -146,6 +149,15 @@ class WeighbillGroupOut(BaseModel):
 
 class PaymentScheduleRequest(BaseModel):
     payment_schedule_date: str = Field(..., description="排款日期，格式：YYYY-MM-DD")
+
+
+class WeighbillAuditRequest(BaseModel):
+    audit_status: str = Field(..., description="审核状态：待审核/审核通过/审核未通过")
+    audit_remark: Optional[str] = Field(None, description="审核备注（审核未通过时必填）")
+
+
+class WeighbillContractUpdateRequest(BaseModel):
+    contract_id: int = Field(..., description="新合同ID")
 
 
 class PayeeOption(BaseModel):
@@ -687,7 +699,47 @@ async def set_payment_schedule(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+@router.put("/{weighbill_id}/audit", summary="磅单审核", response_model=dict)
+async def audit_weighbill(
+        weighbill_id: int,
+        request: WeighbillAuditRequest,
+        service: WeighbillService = Depends(get_weighbill_service)
+):
+    """修改磅单审核状态。审核未通过时审核备注必填"""
+    result = service.audit_weighbill(
+        weighbill_id=weighbill_id,
+        audit_status=request.audit_status,
+        audit_remark=request.audit_remark,
+    )
+    if result.get("success"):
+        return result
+    if "不存在" in str(result.get("error", "")):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    raise HTTPException(status_code=400, detail=result.get("error", "审核失败"))
+
+
+@router.put("/{weighbill_id}/contract", summary="修改磅单合同", response_model=dict)
+async def update_weighbill_contract(
+        weighbill_id: int,
+        request: WeighbillContractUpdateRequest,
+        service: WeighbillService = Depends(get_weighbill_service)
+):
+    """
+    修改磅单绑定的合同，级联更新：
+    - 磅单品类的单价与合同的品类单价对应
+    - 报单的合同与品类单价同步
+    - 该报单下所有磅单的合同及单价一并修改
+    """
+    result = service.update_weighbill_contract(weighbill_id, request.contract_id)
+    if result.get("success"):
+        return result
+    if "不存在" in str(result.get("error", "")):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    raise HTTPException(status_code=400, detail=result.get("error", "修改合同失败"))
+
+
 @router.post("/batch-upload", response_model=WeighbillBatchUploadResponse, summary="批量上传磅单")
 async def batch_upload_weighbills(
     warehouse_name: str = Form(..., description="库房名称（将自动关联该库房的收款人）"),

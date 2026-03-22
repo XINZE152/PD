@@ -22,6 +22,8 @@ try:
 except ImportError:
     RAPIDOCR_AVAILABLE = False
 
+from pymysql.cursors import DictCursor
+
 from app.core.paths import UPLOADS_DIR
 from app.services.contract_service import get_conn
 
@@ -37,6 +39,7 @@ class WeighbillService:
     def __init__(self):
         self.ocr = None
         self._weighbill_has_warehouse_name = None
+        self._weighbill_has_audit_columns = None
         if RAPIDOCR_AVAILABLE:
             try:
                 self.ocr = RapidOCR()
@@ -59,6 +62,20 @@ class WeighbillService:
             self._weighbill_has_warehouse_name = False
 
         return self._weighbill_has_warehouse_name
+
+    def _has_weighbill_audit_columns(self) -> bool:
+        """兼容旧库：检查 pd_weighbills 是否有 audit_status 字段"""
+        if self._weighbill_has_audit_columns is not None:
+            return self._weighbill_has_audit_columns
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'audit_status'")
+                    self._weighbill_has_audit_columns = cur.fetchone() is not None
+        except Exception as e:
+            logger.warning("检查 pd_weighbills.audit_status 字段失败: %s", e)
+            self._weighbill_has_audit_columns = False
+        return self._weighbill_has_audit_columns
 
     # ========== 图片预处理 ==========
 
@@ -820,6 +837,9 @@ class WeighbillService:
                         if self._has_weighbill_warehouse_name_column():
                             insert_fields.insert(4, "warehouse_name")
                             insert_values.insert(4, final_warehouse_name)
+                        if self._has_weighbill_audit_columns():
+                            insert_fields.insert(insert_fields.index("upload_status"), "audit_status")
+                            insert_values.insert(insert_values.index(final_upload_status), "待审核")
 
                         placeholders = ", ".join(["%s"] * (len(insert_values)))
                         sql = f"""
@@ -1331,6 +1351,10 @@ class WeighbillService:
                             weighbill_where.append("pd.collection_status = %s")
                             weighbill_params.append(exact_collection_status)
 
+                    # 列表只返回审核通过的磅单
+                    if self._has_weighbill_audit_columns():
+                        weighbill_where.append("w.audit_status = '审核通过'")
+
                     weighbill_sql = " AND ".join(weighbill_where)
 
                     cur.execute(f"""
@@ -1568,6 +1592,158 @@ class WeighbillService:
 
         except Exception as e:
             logger.error(f"设置排款日期失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ========== 磅单审核 ==========
+
+    AUDIT_STATUS_CHOICES = ("待审核", "审核通过", "审核未通过")
+
+    def audit_weighbill(self, weighbill_id: int, audit_status: str, audit_remark: Optional[str] = None) -> Dict[str, Any]:
+        """修改磅单审核状态。审核未通过时审核备注必填"""
+        if audit_status not in self.AUDIT_STATUS_CHOICES:
+            return {"success": False, "error": f"审核状态必须是 {'/'.join(self.AUDIT_STATUS_CHOICES)} 之一"}
+        if audit_status == "审核未通过":
+            remark = (audit_remark or "").strip()
+            if not remark:
+                return {"success": False, "error": "审核未通过时必须填写审核备注"}
+
+        if not self._has_weighbill_audit_columns():
+            return {"success": False, "error": "磅单审核功能未启用"}
+
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM pd_weighbills WHERE id = %s", (weighbill_id,))
+                    if not cur.fetchone():
+                        return {"success": False, "error": "磅单不存在"}
+
+                    cur.execute(
+                        """
+                        UPDATE pd_weighbills
+                        SET audit_status = %s, audit_remark = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (audit_status, (audit_remark or "").strip() or None, weighbill_id),
+                    )
+                    return {
+                        "success": True,
+                        "message": "审核状态更新成功",
+                        "data": {"id": weighbill_id, "audit_status": audit_status, "audit_remark": audit_remark},
+                    }
+        except Exception as e:
+            logger.error("磅单审核失败: %s", e)
+            return {"success": False, "error": str(e)}
+
+    # ========== 修改磅单合同（级联） ==========
+
+    def update_weighbill_contract(
+        self, weighbill_id: int, contract_id: int
+    ) -> Dict[str, Any]:
+        """
+        修改磅单绑定的合同，并级联更新：
+        1. 该磅单品类的单价与修改后合同的品类单价对应
+        2. 该磅单对应报单的合同修改为该磅单的合同
+        3. 报单的品类单价与合同品类单价对齐
+        4. 该报单下所有磅单的合同及品类单价一并修改
+        """
+        try:
+            with get_conn() as conn:
+                with conn.cursor(DictCursor) as cur:
+                    cur.execute(
+                        "SELECT id, delivery_id, product_name, contract_id, contract_no, unit_price FROM pd_weighbills WHERE id = %s",
+                        (weighbill_id,),
+                    )
+                    wb = cur.fetchone()
+                    if not wb:
+                        return {"success": False, "error": "磅单不存在"}
+                    delivery_id = wb["delivery_id"]
+                    if not delivery_id:
+                        return {"success": False, "error": "磅单未关联报单"}
+
+                    cur.execute("SELECT id, contract_no FROM pd_contracts WHERE id = %s", (contract_id,))
+                    contract = cur.fetchone()
+                    if not contract:
+                        return {"success": False, "error": "合同不存在"}
+                    new_contract_no = contract["contract_no"]
+
+                    cur.execute(
+                        "SELECT product_name, unit_price FROM pd_contract_products WHERE contract_id = %s",
+                        (contract_id,),
+                    )
+                    contract_products = {}
+                    for r in (cur.fetchall() or []):
+                        pname = r.get("product_name")
+                        up = r.get("unit_price")
+                        contract_products[pname] = float(up) if up is not None else None
+                    if not contract_products:
+                        return {"success": False, "error": "该合同下没有品种明细"}
+
+                    conn.autocommit(False)
+                    try:
+                        # 1. 更新报单的合同
+                        cur.execute(
+                            "UPDATE pd_deliveries SET contract_id = %s, contract_no = %s WHERE id = %s",
+                            (contract_id, new_contract_no, delivery_id),
+                        )
+
+                        # 2. 同步报单的 pd_delivery_contract_product_prices
+                        cur.execute(
+                            "DELETE FROM pd_delivery_contract_product_prices WHERE delivery_id = %s",
+                            (delivery_id,),
+                        )
+                        for idx, (pname, up) in enumerate(contract_products.items()):
+                            if up is not None:
+                                cur.execute(
+                                    """
+                                    INSERT INTO pd_delivery_contract_product_prices
+                                    (delivery_id, contract_id, product_name, unit_price, sort_order)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    """,
+                                    (delivery_id, contract_id, pname, up, idx),
+                                )
+
+                        # 3. 更新该报单下所有磅单的合同及单价
+                        cur.execute(
+                            "SELECT id, product_name, net_weight FROM pd_weighbills WHERE delivery_id = %s",
+                            (delivery_id,),
+                        )
+                        all_wbs = cur.fetchall() or []
+                        for r in all_wbs:
+                            wid = r["id"]
+                            pname = r.get("product_name") or ""
+                            new_price = contract_products.get(pname)
+                            if new_price is not None:
+                                new_total = None
+                                nw = r.get("net_weight")
+                                if nw is not None:
+                                    new_total = float(Decimal(str(new_price)) * Decimal(str(nw))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                                cur.execute(
+                                    """
+                                    UPDATE pd_weighbills
+                                    SET contract_id = %s, contract_no = %s, unit_price = %s, total_amount = %s
+                                    WHERE id = %s
+                                    """,
+                                    (contract_id, new_contract_no, new_price, new_total, wid),
+                                )
+                            else:
+                                cur.execute(
+                                    "UPDATE pd_weighbills SET contract_id = %s, contract_no = %s WHERE id = %s",
+                                    (contract_id, new_contract_no, wid),
+                                )
+
+                        conn.commit()
+                        return {
+                            "success": True,
+                            "message": "磅单合同已修改，报单及下属磅单已同步",
+                            "data": {"weighbill_id": weighbill_id, "contract_id": contract_id, "delivery_id": delivery_id},
+                        }
+                    except Exception:
+                        conn.rollback()
+                        raise
+                    finally:
+                        conn.autocommit(True)
+        except Exception as e:
+            logger.error("修改磅单合同失败: %s", e)
             return {"success": False, "error": str(e)}
 
 

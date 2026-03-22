@@ -305,10 +305,13 @@ TABLE_STATEMENTS = [
 		uploader_id BIGINT COMMENT '上传人ID（关联pd_users.id）',
 		uploader_name VARCHAR(64) COMMENT '上传人姓名（冗余存储）',
 		is_last_truck_for_contract TINYINT DEFAULT 0 COMMENT '是否为合同最后一车',
+		audit_status VARCHAR(32) DEFAULT '待审核' COMMENT '磅单审核状态：待审核/审核通过/审核未通过',
+		audit_remark TEXT DEFAULT NULL COMMENT '审核备注',
 		uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 		INDEX idx_weigh_date (weigh_date),
+		INDEX idx_audit_status (audit_status),
 		INDEX idx_vehicle_no (vehicle_no),
 		INDEX idx_contract_no (contract_no),
 		INDEX idx_contract_id (contract_id),  -- 新增索引
@@ -657,6 +660,38 @@ def init_permission_definitions():
 		connection.close()
 
 
+def ensure_weighbill_audit_columns():
+	"""旧库补全磅单审核状态与审核备注字段"""
+	config = get_mysql_config()
+	connection = pymysql.connect(**config)
+	try:
+		with connection.cursor() as cursor:
+			cursor.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'audit_status'")
+			if cursor.fetchone() is None:
+				cursor.execute("""
+					ALTER TABLE pd_weighbills
+					ADD COLUMN audit_status VARCHAR(32) DEFAULT '待审核'
+					COMMENT '磅单审核状态：待审核/审核通过/审核未通过'
+					AFTER is_last_truck_for_contract
+				""")
+				try:
+					cursor.execute("ALTER TABLE pd_weighbills ADD INDEX idx_audit_status (audit_status)")
+				except Exception:
+					pass
+				print("pd_weighbills 已添加 audit_status 列")
+			cursor.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'audit_remark'")
+			if cursor.fetchone() is None:
+				cursor.execute("""
+					ALTER TABLE pd_weighbills
+					ADD COLUMN audit_remark TEXT DEFAULT NULL COMMENT '审核备注'
+					AFTER audit_status
+				""")
+				print("pd_weighbills 已添加 audit_remark 列")
+		connection.commit()
+	finally:
+		connection.close()
+
+
 def create_tables() -> None:
 	# 第1步：先创建数据库（如果不存在）
 	create_database_if_not_exists()
@@ -670,6 +705,7 @@ def create_tables() -> None:
 				cursor.execute(statement)
 		print("所有数据表创建完成")
 		init_permission_definitions()
+		ensure_weighbill_audit_columns()
 	finally:
 		connection.close()
 

@@ -195,6 +195,22 @@ class DeliveryService:
         self._weighbill_warehouse_name_exists = exists
         return exists
 
+    def _weighbill_has_audit_columns(self) -> bool:
+        """兼容旧库：检测 pd_weighbills 是否有 audit_status 列"""
+        cached = getattr(self, "_weighbill_audit_columns_exists", None)
+        if cached is not None:
+            return cached
+        exists = False
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SHOW COLUMNS FROM pd_weighbills LIKE 'audit_status'")
+                    exists = cur.fetchone() is not None
+        except Exception as e:
+            logger.warning("检测 pd_weighbills.audit_status 字段失败: %s", e)
+        self._weighbill_audit_columns_exists = exists
+        return exists
+
     def _get_upload_status(self, image_path: Optional[str]) -> str:
         if image_path and os.path.exists(image_path):
             return "联单已上传"
@@ -573,7 +589,7 @@ class DeliveryService:
                             logger.warning(f"品种 {product_name} 的磅单已存在，跳过")
                             continue
 
-                        # 创建磅单，标记最后一车
+                        # 创建磅单，标记最后一车，默认审核状态为待审核
                         is_last_mark = 1 if is_last_for_contract else 0
                         insert_fields = [
                             "delivery_id", "contract_no", "vehicle_no", "product_name",
@@ -589,6 +605,9 @@ class DeliveryService:
                         if self._weighbill_has_warehouse_name_column():
                             insert_fields.insert(4, "warehouse_name")
                             insert_values.insert(4, warehouse_name)
+                        if self._weighbill_has_audit_columns():
+                            insert_fields.insert(insert_fields.index("upload_status"), "audit_status")
+                            insert_values.insert(insert_values.index('待上传'), "待审核")
 
                         placeholders = ", ".join(["%s"] * len(insert_values))
                         cur.execute(f"""
