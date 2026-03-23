@@ -546,8 +546,12 @@ async def list_weighbills(
         exact_shipper: Optional[str] = Query(None, description="精确发货人/报单人"),
         exact_contract_no: Optional[str] = Query(None, description="精确合同编号"),
         exact_report_date: Optional[str] = Query(None, description="精确报单日期"),
-        exact_driver_name: Optional[str] = Query(None, description="精确司机姓名"),
-        exact_vehicle_no: Optional[str] = Query(None, description="精确车号"),
+        exact_driver_name: Optional[str] = Query(None, description="精确司机姓名（与 driver_name 二选一：传 driver_name 时用模糊）"),
+        exact_driver_id_card: Optional[str] = Query(None, description="精确司机身份证号"),
+        exact_vehicle_no: Optional[str] = Query(None, description="精确车牌号（与 vehicle_no 二选一：传 vehicle_no 时用模糊）"),
+        driver_name: Optional[str] = Query(None, description="司机姓名（模糊，LIKE）"),
+        driver_id_card: Optional[str] = Query(None, description="司机身份证（模糊，LIKE）"),
+        vehicle_no: Optional[str] = Query(None, description="车牌号（模糊，LIKE，对应报单车牌）"),
         exact_weigh_date: Optional[str] = Query(None, description="精确磅单日期"),
         exact_ocr_status: Optional[str] = Query(None, description="精确磅单状态：待上传磅单/已确认"),
         # === 新增 ===
@@ -561,7 +565,11 @@ async def list_weighbills(
     """
     查询磅单列表（按报单ID分组）
 
-    新增筛选参数：
+    按司机/车辆筛选（与报单 pd_deliveries 一致）：
+    - driver_name、driver_id_card、vehicle_no：模糊查询（LIKE）；
+    - exact_driver_name、exact_driver_id_card、exact_vehicle_no：精确匹配；同一维度若同时传模糊与精确，以模糊为准。
+
+    其他筛选：
     - exact_schedule_status : 排款状态（0待排期/1已排期）
     - exact_payout_status    : 打款状态（0待打款/1已打款）
     - exact_collection_status: 回款状态（0待回款/1已回首笔/2已回款）
@@ -574,7 +582,11 @@ async def list_weighbills(
             exact_contract_no=exact_contract_no,
             exact_report_date=exact_report_date,
             exact_driver_name=exact_driver_name,
+            exact_driver_id_card=exact_driver_id_card,
             exact_vehicle_no=exact_vehicle_no,
+            driver_name=driver_name,
+            driver_id_card=driver_id_card,
+            vehicle_no=vehicle_no,
             exact_weigh_date=exact_weigh_date,
             exact_ocr_status=exact_ocr_status,
             exact_schedule_status=exact_schedule_status,

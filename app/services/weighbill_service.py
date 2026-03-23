@@ -1237,6 +1237,10 @@ class WeighbillService:
             exact_report_date: str = None,
             exact_driver_name: str = None,
             exact_vehicle_no: str = None,
+            exact_driver_id_card: str = None,
+            driver_name: str = None,
+            driver_id_card: str = None,
+            vehicle_no: str = None,
             exact_weigh_date: str = None,
             exact_ocr_status: str = None,
             exact_delivery_id: int = None,
@@ -1250,6 +1254,10 @@ class WeighbillService:
         """
         查询磅单列表（按报单ID分组）
         返回嵌套结构：报单信息 + 该报单下的所有磅单列表
+
+        司机姓名 / 身份证 / 车牌：与报单 pd_deliveries 关联。
+        - driver_name、driver_id_card、vehicle_no 非空时按 LIKE %关键词% 模糊匹配；
+        - 对应字段未传模糊参数时，可使用 exact_driver_name、exact_driver_id_card、exact_vehicle_no 精确匹配。
         """
         try:
             with get_conn() as conn:
@@ -1267,10 +1275,25 @@ class WeighbillService:
                     if exact_report_date:
                         delivery_where.append("d.report_date = %s")
                         delivery_params.append(exact_report_date)
-                    if exact_driver_name:
+                    # 司机姓名：模糊优先
+                    if driver_name and str(driver_name).strip():
+                        delivery_where.append("d.driver_name LIKE %s")
+                        delivery_params.append(f"%{str(driver_name).strip()}%")
+                    elif exact_driver_name:
                         delivery_where.append("d.driver_name = %s")
                         delivery_params.append(exact_driver_name)
-                    if exact_vehicle_no:
+                    # 身份证：模糊优先
+                    if driver_id_card and str(driver_id_card).strip():
+                        delivery_where.append("d.driver_id_card LIKE %s")
+                        delivery_params.append(f"%{str(driver_id_card).strip()}%")
+                    elif exact_driver_id_card:
+                        delivery_where.append("d.driver_id_card = %s")
+                        delivery_params.append(exact_driver_id_card)
+                    # 车牌号：模糊优先（报单车牌）
+                    if vehicle_no and str(vehicle_no).strip():
+                        delivery_where.append("d.vehicle_no LIKE %s")
+                        delivery_params.append(f"%{str(vehicle_no).strip()}%")
+                    elif exact_vehicle_no:
                         delivery_where.append("d.vehicle_no = %s")
                         delivery_params.append(exact_vehicle_no)
                     if exact_delivery_id is not None:
