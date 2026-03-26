@@ -318,22 +318,29 @@ class WeighbillService:
     # ========== 合同价格查询 ==========
 
     def get_contract_price_by_product(self, contract_no: str, product_name: str) -> Optional[float]:
-        """根据合同编号和品种获取单价"""
+        """根据合同编号和品种获取单价（自动套用品种映射）"""
+        if not contract_no or not product_name:
+            return None
+        mill_product = convert_to_mill_product(str(product_name).strip())
         try:
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT p.unit_price 
-                        FROM pd_contract_products p
-                        JOIN pd_contracts c ON p.contract_id = c.id
-                        WHERE c.contract_no = %s 
-                        AND p.product_name = %s
-                        AND p.unit_price IS NOT NULL
-                        LIMIT 1
-                    """, (contract_no, product_name))
-                    row = cur.fetchone()
-                    if row and row[0]:
-                        return float(row[0])
+                    # 先按映射后的冶炼厂品种查询
+                    for pname in [mill_product, str(product_name).strip()]:
+                        if not pname:
+                            continue
+                        cur.execute("""
+                            SELECT p.unit_price 
+                            FROM pd_contract_products p
+                            JOIN pd_contracts c ON p.contract_id = c.id
+                            WHERE c.contract_no = %s 
+                            AND p.product_name = %s
+                            AND p.unit_price IS NOT NULL
+                            LIMIT 1
+                        """, (contract_no, pname))
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            return float(row[0])
 
                     # 未找到，返回该合同第一个有价格的品种
                     cur.execute("""
