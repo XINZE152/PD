@@ -693,7 +693,9 @@ class DeliveryService:
         if products_raw is None:
             products = []
         elif isinstance(products_raw, str):
-            products = [p.strip() for p in products_raw.split(',') if p.strip()]
+            # 兼容中英文逗号、顿号、斜杠、竖线等常见分隔符
+            normalized = re.sub(r"[，、/|+；;]+", ",", products_raw)
+            products = [p.strip() for p in normalized.split(',') if p.strip()]
         elif isinstance(products_raw, (list, tuple)):
             products = list(products_raw)
 
@@ -1867,7 +1869,8 @@ class DeliveryService:
             - driver_name: 司机姓名（可为2字、3字、4字或更多，请完整识别勿截断）
             - driver_phone: 司机手机号（11位）
             - driver_id_card: 身份证号（18位，末位可为数字或X）
-            - product_name: 货物品种（如电动、黑皮、通信、摩托车、大白、牵引、AGM、EFB、电信、小四斤、管式等）
+            - products: 货物品类列表（最多4个；如["电动","通信"]）
+            - product_name: 主品种（若识别到多个，取第一个；与 products[0] 保持一致）
             - has_delivery_order: 是否**随车自带纸质联单**（有/无/需办）。注意：
               ·「无联单」「不带联单」「没有联单」「走公司凭证」「仅凭证」「需要做联单」「待办联单」均为**无**（司机未随车带联单或走公司侧流程）。
               · 仅当明确写「有联单」「自带联单」「随车联单」等才填「有」。
@@ -1883,6 +1886,7 @@ class DeliveryService:
                 "driver_name": "张三",
                 "driver_phone": "13800138000",
                 "driver_id_card": "410881199001011234",
+                "products": ["电动", "通信"],
                 "product_name": "电动",
                 "has_delivery_order": "无",
                 "target_factory_name": "金利"
@@ -1913,8 +1917,11 @@ class DeliveryService:
             # 设置默认值
             if 'target_factory_name' not in result or not result['target_factory_name']:
                 result['target_factory_name'] = '金利'
-            if 'product_name' not in result or not result['product_name']:
-                result['product_name'] = '普通'
+            products = self._parse_products(result.get('products'), result.get('product_name'))
+            if not products:
+                products = ['普通']
+            result['products'] = products
+            result['product_name'] = products[0]
             if 'has_delivery_order' not in result or not result['has_delivery_order']:
                 result['has_delivery_order'] = '无'
                 
@@ -1925,6 +1932,7 @@ class DeliveryService:
             # 降级到空结果
             return {
                 'target_factory_name': '金利',
+                'products': ['普通'],
                 'product_name': '普通',
                 'has_delivery_order': '无'
             }
@@ -1958,11 +1966,11 @@ class DeliveryService:
                 result['driver_id_card'] = normalized
                 result['warnings'].extend(card_warnings)
         
-        # ========== 修改：品种不做映射，保持原始提取值 ==========
-        if data.get('product_name'):
-            # 只清洗空格，不做任何映射转换
-            result['product_name'] = str(data['product_name']).strip()
-        # =========================================
+        # 品种：支持识别多个品类，返回 products 列表 + product_name（首个）
+        products = self._parse_products(data.get('products'), data.get('product_name'))
+        if products:
+            result['products'] = products
+            result['product_name'] = products[0]
         
         # 联单状态标准化：优先识别「无联单」类长句，禁止用子串「有」误判（如「需要做联单」）；
         # 「已上传」单独出现多为凭证上传，不得等同「有联单」。
@@ -2214,13 +2222,18 @@ class DeliveryService:
         # 2. 验证数据
         validation = self.validate_extracted(extracted.copy())
 
-        # ---- 转换品种为冶炼厂品种 ----
-        original_product = extracted.get('product_name')
-        mill_product = self._convert_to_mill_product(original_product) if original_product else None
-        
-        # 更新 extracted 中的品种为映射后的值，这样前端拿到的是正确的品种
-        if mill_product:
-            extracted['product_name'] = mill_product
+        # ---- 转换品种为冶炼厂品种（支持多个品类）----
+        original_products = self._parse_products(extracted.get('products'), extracted.get('product_name'))
+        mapped_products: List[str] = []
+        for p in original_products:
+            mapped = self._convert_to_mill_product(p) if p else None
+            if mapped and mapped not in mapped_products:
+                mapped_products.append(mapped)
+        mapped_products = mapped_products[:4]
+        if mapped_products:
+            extracted['products'] = mapped_products
+            extracted['product_name'] = mapped_products[0]
+        mill_product = extracted.get('product_name')
         # ----------------------------------------------
         
         # 3. 匹配合同
@@ -2252,6 +2265,7 @@ class DeliveryService:
                 'contract_no': contract_match['contract_no'],
                 'target_factory_name': contract_match['smelter_company'],
                 'product_name': extracted.get('product_name'),
+                'products': ",".join(extracted.get('products') or []),
                 'unit_price': contract_match['unit_price'],
             }
         
