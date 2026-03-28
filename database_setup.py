@@ -694,6 +694,37 @@ def ensure_weighbill_audit_columns():
 		connection.close()
 
 
+def ensure_pd_user_permissions_columns():
+	"""旧库补全 pd_user_permissions 中新增的权限列（CREATE IF NOT EXISTS 不会修改已有表）"""
+	config = get_mysql_config()
+	connection = pymysql.connect(**config)
+	try:
+		with connection.cursor() as cursor:
+			cursor.execute("SHOW COLUMNS FROM pd_user_permissions LIKE 'perm_warehouse_manage'")
+			if cursor.fetchone() is None:
+				cursor.execute("""
+					ALTER TABLE pd_user_permissions
+					ADD COLUMN perm_warehouse_manage TINYINT DEFAULT 0 COMMENT '库房管理权限'
+					AFTER perm_weighbill_manage
+				""")
+				print("pd_user_permissions 已添加 perm_warehouse_manage 列")
+			cursor.execute("SHOW COLUMNS FROM pd_user_permissions LIKE 'perm_payee_manage'")
+			if cursor.fetchone() is None:
+				cursor.execute("SHOW COLUMNS FROM pd_user_permissions LIKE 'perm_warehouse_manage'")
+				after = "perm_warehouse_manage" if cursor.fetchone() else "perm_weighbill_manage"
+				cursor.execute(
+					f"""
+					ALTER TABLE pd_user_permissions
+					ADD COLUMN perm_payee_manage TINYINT DEFAULT 0 COMMENT '收款人管理权限'
+					AFTER {after}
+					"""
+				)
+				print("pd_user_permissions 已添加 perm_payee_manage 列")
+		connection.commit()
+	finally:
+		connection.close()
+
+
 def migrate_delivery_status_to_audit():
 	"""迁移报单状态：待确认/已确认/已完成/已取消 -> 审核通过/审核未通过"""
 	config = get_mysql_config()
@@ -731,6 +762,7 @@ def create_tables() -> None:
 		print("所有数据表创建完成")
 		init_permission_definitions()
 		ensure_weighbill_audit_columns()
+		ensure_pd_user_permissions_columns()
 		migrate_delivery_status_to_audit()
 	finally:
 		connection.close()
