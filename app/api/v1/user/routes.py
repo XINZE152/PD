@@ -690,6 +690,9 @@ def update_role_template(
     """
     修改角色权限模板（持久化到数据库）
     - apply_to_existing: 是否将更新后的模板应用到现有用户（覆盖用户权限）
+    - 「管理员」模板同样可修改：系统新增权限字段后，可在此为管理员模板勾选新权限并勾选 apply_to_existing，
+      将更新同步到所有管理员账号；若删减管理员模板权限，仅影响 pd_user_permissions 中的细粒度开关，
+      部分接口仍以「角色=管理员」放行，与具体业务路由实现有关。
     """
     # 权限检查
     if current_user.get("role") != "管理员":
@@ -697,10 +700,6 @@ def update_role_template(
 
     if role not in PermissionService.VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"无效的角色，可选: {PermissionService.VALID_ROLES}")
-
-    # 管理员角色必须拥有所有权限，不可修改
-    if role == "管理员":
-        raise HTTPException(status_code=400, detail="管理员角色必须拥有所有权限，不可修改")
 
     # 验证权限字段
     invalid_perms = [p for p in body.permissions.keys() if p not in PermissionService.get_all_fields()]
