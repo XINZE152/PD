@@ -1277,10 +1277,11 @@ class PaymentService:
                 where_sql = " AND ".join(where_clauses)
 
                 # 查询总数
+                delivery_join = "COALESCE(pd.delivery_id, pd.sales_order_id)"
                 count_sql = f"""
                     SELECT COUNT(*) as total 
                     FROM {PaymentService.TABLE_NAME} pd
-                    LEFT JOIN pd_deliveries d ON d.id = pd.delivery_id
+                    LEFT JOIN pd_deliveries d ON d.id = {delivery_join}
                     LEFT JOIN pd_weighbills wb ON wb.id = pd.weighbill_id
                     LEFT JOIN pd_balance_details b ON b.weighbill_id = wb.id
                     WHERE {where_sql}
@@ -1410,7 +1411,7 @@ class PaymentService:
                         wb.unit_price as 合同单价
 
                     FROM {PaymentService.TABLE_NAME} pd
-                    LEFT JOIN pd_deliveries d ON d.id = pd.delivery_id
+                    LEFT JOIN pd_deliveries d ON d.id = {delivery_join}
                     LEFT JOIN pd_weighbills wb ON wb.id = pd.weighbill_id
                     LEFT JOIN pd_balance_details b ON b.weighbill_id = wb.id
                     WHERE {where_sql}

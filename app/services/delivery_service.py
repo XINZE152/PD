@@ -1073,9 +1073,8 @@ class DeliveryService:
             quantity = Decimal(str(data.get('quantity', 0)))
             planned_trucks = self._calculate_trucks(quantity)
             data['planned_trucks'] = planned_trucks
-            # 新建一律待审：库内用「审核未通过」表示待审核（与 list_deliveries_by_manager 中
-            # audit_status=待审核 -> status='审核未通过' 一致）；不再按角色自动「审核通过」。
-            data['status'] = '审核未通过'
+            # 新建报单为「待审核」；仅人工审核结论为「审核通过」或「审核未通过」。
+            data['status'] = '待审核'
             # 合同匹配
             target_factory = data.get('target_factory_name')
             exact_contract_no = data.get('contract_no')  # 获取用户指定的合同编号
@@ -1175,7 +1174,7 @@ class DeliveryService:
                         order_plan_flag_int,
                         unit_price,
                         total_amount,
-                        data.get('status', '审核未通过'),
+                        data.get('status', '待审核'),
                         uploader_id,
                         uploader_name,
                         reporter_id,
@@ -1513,6 +1512,21 @@ class DeliveryService:
 
     # delivery_service.py - class DeliveryService
 
+    def _delete_unuploaded_weighbills_for_delivery(self, delivery_id: int) -> None:
+        """报单审核驳回时删除尚未实际上传的磅单占位记录（仅待上传）。"""
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM pd_weighbills
+                        WHERE delivery_id = %s AND upload_status = '待上传'
+                        """,
+                        (delivery_id,),
+                    )
+        except Exception as e:
+            logger.warning("删除待上传磅单占位失败 delivery_id=%s: %s", delivery_id, e)
+
     def audit_delivery(self, delivery_id: int, new_status: str, current_user: dict) -> Dict[str, Any]:
         """
         审核报单，修改审核状态（仅限审核主管/管理员）
@@ -1530,11 +1544,14 @@ class DeliveryService:
             }
 
         # 调用通用更新方法（只传递 status 字段）
-        return self.update_delivery(
+        result = self.update_delivery(
             delivery_id,
             data={'status': new_status},
             current_user=current_user
         )
+        if result.get("success") and new_status == "审核未通过":
+            self._delete_unuploaded_weighbills_for_delivery(delivery_id)
+        return result
     def add_voucher_images(self, delivery_id: int, image_bytes_list: List[bytes], vehicle_no: str = None) -> Dict[
         str, Any]:
         """向指定订单追加凭证图片（最多6张）"""
@@ -2644,7 +2661,7 @@ class DeliveryService:
                     # 审核状态筛选
                     if audit_status:
                         if audit_status == '待审核':
-                            where_clauses.append("status = '审核未通过'")
+                            where_clauses.append("status = '待审核'")
                         elif audit_status == '已审核':
                             where_clauses.append("status = '审核通过'")
 

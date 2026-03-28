@@ -35,7 +35,7 @@ class DeliveryCreateRequest(BaseModel):
     driver_phone: str = Field(..., description="司机电话")
     driver_id_card: Optional[str] = Field(None, description="身份证号")
     has_delivery_order: str = Field("无", description="是否有联单：有/无")
-    status: str = Field("审核未通过", description="审核状态：审核通过/审核未通过")
+    status: str = Field("待审核", description="审核状态：待审核/审核通过/审核未通过")
     uploaded_by: Optional[str] = Field(None, description="上传者身份：司机/公司（用于判断来源）")
     reporter_id: Optional[int] = Field(None, description="报单人ID（关联pd_users.id）")  # 新增
     reporter_name: Optional[str] = Field(None, description="报单人姓名")  # 新增
@@ -246,7 +246,7 @@ async def create_delivery(
     driver_phone: str = Form(...),
     driver_id_card: Optional[str] = Form(None),
     has_delivery_order: str = Form("无"),
-    status: str = Form("审核未通过"),
+    status: str = Form("待审核"),
     uploaded_by: Optional[str] = Form(None),
     reporter_id: Optional[int] = Form(None, description="报单人ID"),
     reporter_name: Optional[str] = Form(None, description="报单人姓名"),
@@ -332,7 +332,7 @@ class DeliveryCreateJsonRequest(BaseModel):
     driver_phone: str = Field(..., description="司机电话")
     driver_id_card: Optional[str] = Field(None, description="身份证号")
     has_delivery_order: str = Field("无", description="是否有联单：有/无")
-    status: str = Field("审核未通过", description="审核状态：审核通过/审核未通过")
+    status: str = Field("待审核", description="审核状态：待审核/审核通过/审核未通过")
     uploaded_by: Optional[str] = Field(None, description="上传者身份：司机/公司")
     reporter_id: Optional[int] = Field(None, description="报单人ID")
     reporter_name: Optional[str] = Field(None, description="报单人姓名")
@@ -1240,7 +1240,7 @@ async def delete_delivery_pdf(
 @router.get("/by-manager", summary="按大区经理查询报单", response_model=dict)
 async def list_deliveries_by_manager(
     manager_name: str = Query(..., description="大区经理姓名（必填）"),
-    audit_status: Optional[str] = Query(None, description="审核状态筛选：待审核(审核未通过)/已审核(审核通过)/全部"),
+    audit_status: Optional[str] = Query(None, description="审核状态筛选：待审核/已审核(审核通过)/全部"),
     date_from: Optional[str] = Query(None, description="开始日期"),
     date_to: Optional[str] = Query(None, description="结束日期"),
     page: int = Query(1, ge=1),

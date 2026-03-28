@@ -383,42 +383,86 @@ class WeighbillService:
 
     # ========== 报单匹配 ==========
 
+    @staticmethod
+    def _normalize_vehicle_no_for_match(vehicle_no: Optional[str]) -> Optional[str]:
+        """车牌比对：去空格、全角空格、常见分隔符，并大写拉丁字母。"""
+        if vehicle_no is None:
+            return None
+        s = str(vehicle_no).strip().upper()
+        s = re.sub(r"[\s　·.]+", "", s)
+        return s or None
+
     def match_delivery_info(self, weigh_date: str, vehicle_no: str,
                             driver_name: Optional[str] = None,
                             contract_no: Optional[str] = None) -> Optional[Dict]:
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    params = [vehicle_no, weigh_date, weigh_date, weigh_date, weigh_date]
-                    extra_conditions = ""
-                    if driver_name:
-                        extra_conditions += " AND driver_name = %s"
-                        params.append(driver_name)
-                    if contract_no:
-                        extra_conditions += " AND contract_no = %s"
-                        params.append(contract_no)
-
-                    cur.execute(f"""
-                        SELECT * FROM pd_deliveries 
-                        WHERE vehicle_no = %s 
-                        AND (
-                            report_date = %s 
-                            OR report_date = DATE_ADD(%s, INTERVAL 1 DAY)
-                            OR report_date = DATE_SUB(%s, INTERVAL 1 DAY)
-                        )
-                        AND status = '审核通过'         -- 只匹配审核通过的报单
-                        {extra_conditions}
-                        ORDER BY ABS(DATEDIFF(report_date, %s)), created_at ASC
-                        LIMIT 1
-                    """, tuple(params))
-                    row = cur.fetchone()
-                    if not row:
-                        return None
-                    columns = [desc[0] for desc in cur.description]
-                    return dict(zip(columns, row))
-        except Exception as e:
-            logger.error(f"匹配报货订单失败: {e}")
+        """
+        按磅单日期±1天 + 车牌匹配报单。
+        参与匹配：待审核、审核通过（已明确驳回的不匹配）。
+        若带合同号首次未命中，会再尝试不按合同号匹配（避免 OCR 合同号与系统略有差异）。
+        """
+        plate_norm = self._normalize_vehicle_no_for_match(vehicle_no)
+        plate_raw = str(vehicle_no).strip() if vehicle_no else None
+        if not plate_norm and not plate_raw:
             return None
+
+        def _run_query(extra_conditions: str, params: list) -> Optional[Dict]:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f"""
+                            SELECT * FROM pd_deliveries 
+                            WHERE (
+                                REPLACE(REPLACE(vehicle_no, ' ', ''), '　', '') = %s
+                                OR vehicle_no = %s
+                            )
+                            AND (
+                                report_date = DATE(%s)
+                                OR report_date = DATE_ADD(DATE(%s), INTERVAL 1 DAY)
+                                OR report_date = DATE_SUB(DATE(%s), INTERVAL 1 DAY)
+                            )
+                            AND status IN ('待审核', '审核通过')
+                            {extra_conditions}
+                            ORDER BY ABS(DATEDIFF(report_date, DATE(%s))), created_at ASC
+                            LIMIT 1
+                        """, tuple(params))
+                        row = cur.fetchone()
+                        if not row:
+                            return None
+                        columns = [desc[0] for desc in cur.description]
+                        return dict(zip(columns, row))
+            except Exception as e:
+                logger.error(f"匹配报货订单失败: {e}")
+                return None
+
+        base_params = [
+            plate_norm or plate_raw,
+            plate_raw or plate_norm,
+            weigh_date, weigh_date, weigh_date, weigh_date,
+        ]
+        extra = ""
+        if driver_name:
+            extra += " AND driver_name = %s"
+            base_params.append(driver_name)
+        if contract_no:
+            extra += " AND contract_no = %s"
+            base_params.append(contract_no)
+
+        found = _run_query(extra, list(base_params))
+        if found:
+            return found
+        if contract_no:
+            # 合同号 OCR 与系统不一致时，用车牌+日期再试
+            retry_extra = ""
+            retry_params = [
+                plate_norm or plate_raw,
+                plate_raw or plate_norm,
+                weigh_date, weigh_date, weigh_date, weigh_date,
+            ]
+            if driver_name:
+                retry_extra += " AND driver_name = %s"
+                retry_params.append(driver_name)
+            return _run_query(retry_extra, retry_params)
+        return None
 
     def auto_fill_data(self, ocr_data: Dict) -> Dict:
         result = ocr_data.copy()
@@ -1668,11 +1712,70 @@ class WeighbillService:
                         WHERE weighbill_id = %s
                     """, (payment_schedule_date, weighbill_id))
 
-                    return {
-                        "success": True,
-                        "message": "排款日期设置成功",
-                        "data": {"id": weighbill_id, "payment_schedule_date": payment_schedule_date, "schedule_status": 1}
-                    }
+            # 打款管理列表以 pd_payment_details 为主表；若从未走上传回款逻辑则无明细，补建一条
+            try:
+                from decimal import Decimal
+
+                from app.services.payment_services import PaymentService
+
+                with get_conn() as conn2:
+                    with conn2.cursor() as cur2:
+                        cur2.execute(
+                            "SELECT id FROM pd_payment_details WHERE weighbill_id = %s LIMIT 1",
+                            (weighbill_id,),
+                        )
+                        if not cur2.fetchone():
+                            cur2.execute(
+                                """
+                                SELECT w.delivery_id, w.contract_no, w.net_weight, w.unit_price, w.product_name,
+                                       d.target_factory_name
+                                FROM pd_weighbills w
+                                LEFT JOIN pd_deliveries d ON d.id = w.delivery_id
+                                WHERE w.id = %s
+                                """,
+                                (weighbill_id,),
+                            )
+                            row = cur2.fetchone()
+                if row:
+                    if isinstance(row, dict):
+                        delivery_id = row.get("delivery_id")
+                        contract_no = row.get("contract_no") or ""
+                        net_weight = row.get("net_weight")
+                        unit_price = row.get("unit_price")
+                        product_name = row.get("product_name")
+                        smelter_name = row.get("target_factory_name") or ""
+                    else:
+                        delivery_id = row[0]
+                        contract_no = row[1] or ""
+                        net_weight = row[2]
+                        unit_price = row[3]
+                        product_name = row[4]
+                        smelter_name = (row[5] or "") if len(row) > 5 else ""
+                    if delivery_id:
+                        PaymentService.create_or_update_by_weighbill(
+                            weighbill_id=weighbill_id,
+                            delivery_id=int(delivery_id),
+                            contract_no=str(contract_no),
+                            smelter_name=str(smelter_name),
+                            material_name=str(product_name) if product_name else None,
+                            unit_price=Decimal(str(unit_price)) if unit_price not in (None, "") else None,
+                            net_weight=Decimal(str(net_weight)) if net_weight not in (None, "") else None,
+                            total_amount=None,
+                            payee=None,
+                            created_by=None,
+                        )
+            except Exception as ensure_ex:
+                logger.warning(
+                    "排期后补建收款明细失败 weighbill_id=%s: %s",
+                    weighbill_id,
+                    ensure_ex,
+                )
+
+            return {
+                "success": True,
+                "message": "排款日期设置成功",
+                "data": {"id": weighbill_id, "payment_schedule_date": payment_schedule_date, "schedule_status": 1},
+            }
 
         except Exception as e:
             logger.error(f"设置排款日期失败: {e}")

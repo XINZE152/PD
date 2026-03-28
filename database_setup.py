@@ -185,7 +185,7 @@ TABLE_STATEMENTS = [
 		is_last_truck_for_order_plan TINYINT DEFAULT 0 COMMENT '是否订货计划最后一车',
 		contract_unit_price DECIMAL(12, 2) COMMENT '合同单价',
 		total_amount DECIMAL(14, 2) COMMENT '总价（单价×数量）',
-		status VARCHAR(32) DEFAULT '审核未通过' COMMENT '审核状态：审核通过/审核未通过',
+		status VARCHAR(32) DEFAULT '待审核' COMMENT '审核状态：待审核/审核通过/审核未通过',
 		uploader_id BIGINT COMMENT '上传人ID（关联pd_users.id）',
 		uploader_name VARCHAR(64) COMMENT '上传人姓名（冗余存储）',
 		planned_trucks INT DEFAULT 1 COMMENT '预计车数（quantity/35向上取整）',
