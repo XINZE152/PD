@@ -23,6 +23,7 @@ dependencies = [
   "openpyxl>=3.1.0",
   "pandas>=2.2.0",
   "Pillow>=10.0.0",
+  "pulp>=3.3.0",
   "pydantic>=2.10.0",
   "PyJWT>=2.9.0",
   "PyMySQL>=1.1.0",
@@ -45,3 +46,4 @@ packages = ["app", "core", "services"]
 
 [tool.uv]
 default-groups = []
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
