@@ -363,15 +363,13 @@ class OrderPlanService:
         *,
         operator_id: Optional[int] = None,
         operator_name: Optional[str] = None,
-        keep_audit_status: bool = False,
     ) -> Dict[str, Any]:
         """
         仅当订货计划当前为「审核通过」或「审核未通过」时可改车数（待审核不可改）。
-        keep_audit_status=True（审核主管/会计）：只更新车数与操作人，状态不变。
-        keep_audit_status=False：车数更新后状态改为「待审核」，需重新审核。
+        只更新车数与操作人，审核状态不变；车数须 ≥1。
         """
-        if truck_count < 0:
-            return {"success": False, "error": "车数不能为负"}
+        if truck_count < 1:
+            return {"success": False, "error": "车数须大于 0"}
 
         _ensure_order_plan_remark_column()
         try:
@@ -411,13 +409,8 @@ class OrderPlanService:
                         old_truck_count = int(row.get("truck_count") or 0)
                         plan_no_row = (row.get("plan_no") or "").strip()
 
-                        # 审核主管/会计：保持当前审核结论；其他角色：改后退回待审核
-                        if keep_audit_status:
-                            new_status = current_status
-                        else:
-                            new_status = AUDIT_STATUS_PENDING
-                        # 仅「待审核/审核通过」计入报货计划车数上限；保持「审核未通过」时不计入
-                        include_candidate = new_status in (
+                        # 仅「待审核/审核通过」计入报货计划车数上限，「审核未通过」不计入
+                        include_candidate = current_status in (
                             AUDIT_STATUS_PENDING,
                             AUDIT_STATUS_APPROVED,
                         )
@@ -436,10 +429,7 @@ class OrderPlanService:
                         # 审核通过时已累加报货计划已定车数；改车数须同步，避免再次审核时重复累加
                         delta_confirmed = 0
                         if current_status == AUDIT_STATUS_APPROVED:
-                            if keep_audit_status:
-                                delta_confirmed = truck_count - old_truck_count
-                            else:
-                                delta_confirmed = -old_truck_count
+                            delta_confirmed = truck_count - old_truck_count
                         if delta_confirmed != 0:
                             if not plan_no_row:
                                 conn.rollback()
@@ -459,44 +449,23 @@ class OrderPlanService:
                                 conn.rollback()
                                 return {"success": False, "error": str(e)}
 
-                        if keep_audit_status:
-                            cur.execute(
-                                """
-                                UPDATE pd_order_plans
-                                SET truck_count = %s,
-                                    updated_by = %s,
-                                    updated_by_name = %s
-                                WHERE id = %s
-                                  AND audit_status = %s
-                                """,
-                                (
-                                    truck_count,
-                                    operator_id,
-                                    operator_name,
-                                    order_plan_id,
-                                    current_status,
-                                ),
-                            )
-                        else:
-                            cur.execute(
-                                """
-                                UPDATE pd_order_plans
-                                SET truck_count = %s,
-                                    audit_status = %s,
-                                    updated_by = %s,
-                                    updated_by_name = %s
-                                WHERE id = %s
-                                  AND audit_status = %s
-                                """,
-                                (
-                                    truck_count,
-                                    AUDIT_STATUS_PENDING,
-                                    operator_id,
-                                    operator_name,
-                                    order_plan_id,
-                                    current_status,
-                                ),
-                            )
+                        cur.execute(
+                            """
+                            UPDATE pd_order_plans
+                            SET truck_count = %s,
+                                updated_by = %s,
+                                updated_by_name = %s
+                            WHERE id = %s
+                              AND audit_status = %s
+                            """,
+                            (
+                                truck_count,
+                                operator_id,
+                                operator_name,
+                                order_plan_id,
+                                current_status,
+                            ),
+                        )
                         if cur.rowcount == 0:
                             conn.rollback()
                             return {
