@@ -765,6 +765,7 @@ async def post_purchase_quantity_query(
     """
     一次请求返回 `warehouse_options` 与 `plan`（仓库→合同→冶炼厂→日期→车数），
     数据来自最近一次写入的 `pd_allocation_predictions`，按 `delivery_date` 落在请求区间内筛选。
+    大区经理：`warehouse_options` 与数据范围与 `pd_warehouses.regional_manager` 绑定；筛选仓库须为本人可见库。
     """
     raw = query_ai_purchase_quantity(
         body.start_date,
@@ -772,6 +773,7 @@ async def post_purchase_quantity_query(
         warehouse=body.warehouse,
         contract_no=body.contract_no,
         smelter=body.smelter,
+        current_user=current_user,
     )
     if raw.get("success") and raw.get("data") is not None:
         payload = PurchaseQuantityDataPayload(**raw["data"])
@@ -780,10 +782,10 @@ async def post_purchase_quantity_query(
             message=raw.get("message") or "",
             data=payload,
         )
-    return PurchaseQuantityQueryEnvelope(
-        success=False,
-        message=raw.get("message") or "查询失败",
-        data=None,
+    status_code = int(raw.get("status_code") or 500)
+    raise HTTPException(
+        status_code=status_code,
+        detail=raw.get("message") or "查询失败",
     )
 
 

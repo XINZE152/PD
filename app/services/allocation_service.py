@@ -382,6 +382,47 @@ def get_active_warehouse_names() -> List[str]:
     return names
 
 
+def get_warehouse_names_for_user(user: Optional[Dict[str, Any]]) -> List[str]:
+    """
+    当前用户可见仓库（下拉 warehouse_options）。
+    管理员：全部启用库；大区经理：`pd_warehouses.regional_manager` 与本人姓名一致；其余角色：全部启用库。
+    """
+    if not user:
+        return get_active_warehouse_names()
+    role = (user.get("role") or "").strip()
+    if role == "管理员":
+        return get_active_warehouse_names()
+    if role == "大区经理":
+        name = (user.get("name") or "").strip()
+        if not name:
+            return []
+        from app.services.contract_service import get_conn
+
+        names: List[str] = []
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT warehouse_name
+                        FROM pd_warehouses
+                        WHERE warehouse_name IS NOT NULL AND TRIM(warehouse_name) <> ''
+                          AND (is_active = 1 OR is_active IS NULL)
+                          AND TRIM(COALESCE(regional_manager, '')) = %s
+                        ORDER BY warehouse_name
+                        """,
+                        (name,),
+                    )
+                    for row in cur.fetchall() or []:
+                        wn = row["warehouse_name"] if isinstance(row, dict) else row[0]
+                        if wn:
+                            names.append(str(wn))
+        except Exception as e:
+            print(f"按大区经理读取仓库失败: {e}")
+        return names
+    return get_active_warehouse_names()
+
+
 def get_warehouse_names_by_ids(warehouse_ids: List[int]) -> List[str]:
     """按主键解析 `pd_warehouses.warehouse_name`，仅包含存在的 id。"""
     ids = [i for i in warehouse_ids if isinstance(i, int) and i > 0]
@@ -421,18 +462,20 @@ def query_ai_purchase_quantity(
     contract_no: Optional[str] = None,
     smelter: Optional[str] = None,
     max_days: int = 30,
+    current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     统一查询：仓库下拉选项 + 预测 plan（仓库→合同→冶炼厂→日期→车数）。
     使用 `pd_allocation_predictions` 中最近一次 `prediction_date` 的全量快照，
     再按 `delivery_date` 落在 [start_date, end_date] 内筛选。
+    大区经理仅可见本人名下仓库及 `regional_manager` 匹配的行；`warehouse` 须在可见列表内。
     """
     from app.services.contract_service import get_conn
 
-    def _fail(msg: str) -> Dict[str, Any]:
-        return {"success": False, "message": msg, "data": None}
+    def _fail(msg: str, status_code: int = 400) -> Dict[str, Any]:
+        return {"success": False, "message": msg, "data": None, "status_code": status_code}
 
-    warehouse_options = get_active_warehouse_names()
+    warehouse_options = get_warehouse_names_for_user(current_user)
 
     sd = (start_date or "").strip()
     ed = (end_date or "").strip()
@@ -456,6 +499,10 @@ def query_ai_purchase_quantity(
     cn_filter = (contract_no or "").strip() or None
     sm_filter = (smelter or "").strip() or None
 
+    if wh_filter and current_user and (current_user.get("role") or "").strip() == "大区经理":
+        if wh_filter not in warehouse_options:
+            return _fail("无权筛选该仓库或该仓库不在您的负责范围", 403)
+
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -463,7 +510,7 @@ def query_ai_purchase_quantity(
                 row = cur.fetchone()
                 latest_pd = row[0] if row else None
     except Exception as e:
-        return _fail(f"查询预测数据失败: {e}")
+        return _fail(f"查询预测数据失败: {e}", 500)
 
     if not latest_pd:
         return {
@@ -486,6 +533,22 @@ def query_ai_purchase_quantity(
         "delivery_date <= %s",
     ]
     params: List[Any] = [latest_pd_str, sd, ed]
+
+    if current_user and (current_user.get("role") or "").strip() == "大区经理":
+        mgr_name = (current_user.get("name") or "").strip()
+        opts = warehouse_options
+        if not mgr_name:
+            conditions.append("1=0")
+        elif opts:
+            ph = ",".join(["%s"] * len(opts))
+            conditions.append(
+                f"(warehouse_name IN ({ph}) OR TRIM(COALESCE(regional_manager, '')) = %s)"
+            )
+            params.extend(opts)
+            params.append(mgr_name)
+        else:
+            conditions.append("TRIM(COALESCE(regional_manager, '')) = %s")
+            params.append(mgr_name)
 
     if wh_list:
         ph = ",".join(["%s"] * len(wh_list))
@@ -522,7 +585,7 @@ def query_ai_purchase_quantity(
                 cur.execute(sql, params)
                 rows = cur.fetchall() or []
     except Exception as e:
-        return _fail(f"查询预测明细失败: {e}")
+        return _fail(f"查询预测明细失败: {e}", 500)
 
     plan: Dict[str, Any] = {}
     for row in rows:

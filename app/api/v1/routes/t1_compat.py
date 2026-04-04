@@ -6,7 +6,7 @@ POST /allocation/purchase-quantity/query 同源逻辑）。
 """
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.allocation_service import (
@@ -78,7 +78,7 @@ async def get_purchase_suggestion(
             )
         extra["warehouse_names"] = names
 
-    raw = query_ai_purchase_quantity(start, end, **extra)
+    raw = query_ai_purchase_quantity(start, end, **extra, current_user=current_user)
 
     if raw.get("success") and raw.get("data") is not None:
         payload = PurchaseQuantityDataPayload(**raw["data"])
@@ -87,8 +87,8 @@ async def get_purchase_suggestion(
             message=raw.get("message") or "",
             data=payload,
         )
-    return PurchaseQuantityQueryEnvelope(
-        success=False,
-        message=raw.get("message") or "查询失败",
-        data=None,
+    status_code = int(raw.get("status_code") or 500)
+    raise HTTPException(
+        status_code=status_code,
+        detail=raw.get("message") or "查询失败",
     )
