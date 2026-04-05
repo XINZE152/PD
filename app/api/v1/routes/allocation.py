@@ -865,7 +865,8 @@ async def post_purchase_quantity_query(
     （仓库→合同→冶炼厂→日期→车数）。数据来自最近一次 `pd_allocation_predictions` 快照，
     按 `delivery_date` 落在 [start_date, end_date] 筛选；区间内每个日期均有键，无预测为 0。
     失败时 `success` 为 false、`data` 为 null，HTTP 仍为 200（与 `/t1/get_purchase_suggestion` 一致）。
-    大区经理：`warehouse_options` 与行级范围与 `pd_warehouses.regional_manager` 绑定；筛选仓库须为本人可见库。
+    本接口为公开调用，不传登录用户：`warehouse_options` 为**全部启用仓库**（不按大区经理裁剪）。
+    若需「仅本人负责仓库」，请使用带登录态的同逻辑接口（如兼容路由）或后续单独封装。
     """
     raw = query_ai_purchase_quantity(
         body.start_date,
@@ -873,7 +874,7 @@ async def post_purchase_quantity_query(
         warehouse=body.warehouse,
         contract_no=body.contract_no,
         smelter=body.smelter,
-        current_user=current_user,
+        current_user=None,
     )
     if raw.get("success") and raw.get("data") is not None:
         payload = PurchaseQuantityDataPayload(**raw["data"])
