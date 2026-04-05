@@ -601,7 +601,8 @@ def query_ai_purchase_quantity(
         plan.setdefault(w_h, {}).setdefault(c_n, {}).setdefault(s_m, {})[d_str] = int(t_c or 0)
 
     # 统一输出：每个「仓库→合同→冶炼厂」下，请求区间内每日均有键，无数据为 0
-    date_keys = _date_range(sd.strftime("%Y-%m-%d"), ed.strftime("%Y-%m-%d"))
+    # sd/ed 已为 YYYY-MM-DD 字符串，勿对 str 调用 strftime（否则会 AttributeError → 500）
+    date_keys = _date_range(sd, ed)
     for contracts in plan.values():
         for smelters in contracts.values():
             for sm_key in list(smelters.keys()):
