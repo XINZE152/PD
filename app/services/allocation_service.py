@@ -18,7 +18,7 @@ dispatch_planner.py
 
   约束：
     (1) 合同总量约束：  sum_{w,d} x[w,s,d] == demand[s]      for each smelter s
-    (2) 仓库日产能：    sum_s x[w,s,d] <= daily_cap[w]       for each (w,d)
+    (2) 仓库日产能：    sum_s x[w,s,d] <= daily_cap[w]（若 daily_cap[w] 为 None 则不加此约束）
     (3) 合同有效期：    x[w,s,d] == 0  if d ∉ valid_dates[s]
     (4) 均匀偏差定义：  sum_w x[w,s,d] - target[s] == dev_plus[s,d] - dev_minus[s,d]
 
@@ -29,6 +29,7 @@ dispatch_planner.py
 from __future__ import annotations
 
 import math
+import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -206,29 +207,38 @@ def get_warehouses() -> List[str]:
     return managers
 
 
-def get_warehouse_daily_capacity() -> Dict[str, int]:
+def _per_warehouse_daily_truck_cap() -> Optional[int]:
     """
-    获取各仓库每日发货能力上限(模拟数据)
+    每库每日车数上限。
+    - 未设置、为空、0 或非法值：返回 None，表示**不封顶**（线性规划中**不添加**仓库日产能约束）。
+    - 设置 ALLOCATION_DAILY_CAP_PER_WAREHOUSE 为正整数时启用封顶（例如 50）。
+    """
+    raw = (os.getenv("ALLOCATION_DAILY_CAP_PER_WAREHOUSE") or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    if n <= 0:
+        return None
+    return n
 
-    返回:
-        {仓库名称: 每日最大车数}
+
+def get_warehouse_daily_capacity() -> Dict[str, Optional[int]]:
     """
-    # 读取仓库列表
+    获取各仓库每日发货能力上限。
+
+    默认**不封顶**（值为 None；排产模型中不写「每日 ≤ cap」约束）。
+    设置环境变量 ALLOCATION_DAILY_CAP_PER_WAREHOUSE 为正整数后，各库使用该上限。
+    """
+    cap = _per_warehouse_daily_truck_cap()
     warehouses = get_warehouses()
 
-    # 模拟数据:每个仓库每天最多发 10 车
-    # 后续可以从数据库配置表读取
-    daily_cap = {}
-    for warehouse in warehouses:
-        daily_cap[warehouse] = 10  # 模拟值
+    daily_cap: Dict[str, Optional[int]] = {warehouse: cap for warehouse in warehouses}
 
-    # 如果没有仓库,返回默认值
     if not daily_cap:
-        daily_cap = {
-            "仓库A": 10,
-            "仓库B": 10,
-            "仓库C": 10
-        }
+        daily_cap = {"仓库A": cap, "仓库B": cap, "仓库C": cap}
 
     return daily_cap
 
@@ -791,7 +801,7 @@ def _intersect_dates(dates_a: List[str], dates_b: List[str]) -> List[str]:
 def solve_dispatch_plan(
     contracts: List[ContractDemand],
     warehouses: List[str],
-    daily_cap: Dict[str, int],      # {仓库: 每日最大车数}
+    daily_cap: Dict[str, Optional[int]],  # {仓库: 每日最大车数；None 表示不封顶}
     window_start: str,              # 规划窗口开始 "YYYY-MM-DD"
     window_end: str,                # 规划窗口结束 "YYYY-MM-DD"
     solver_msg: bool = False,
@@ -802,7 +812,7 @@ def solve_dispatch_plan(
     参数：
         contracts    : 合同需求列表
         warehouses   : 仓库名称列表
-        daily_cap    : 各仓库每日发货能力（车数上限）
+        daily_cap    : 各仓库每日发货能力；值为 None 时不加日上限约束
         window_start : 规划窗口起始日期
         window_end   : 规划窗口结束日期
         solver_msg   : 是否打印求解器日志
@@ -869,9 +879,11 @@ def solve_dispatch_plan(
             f"demand_{c.contract_no}",
         )
 
-    # ── 约束 2：仓库每日总发货 <= 产能上限 ──
+    # ── 约束 2：仓库每日总发货 <= 产能上限（None 表示不封顶，不添加约束）──
     for w in warehouses:
-        cap = daily_cap.get(w, 0)
+        cap = daily_cap.get(w)
+        if cap is None:
+            continue
         for d in window_dates:
             # 当天该仓库有哪些合同可发
             active_on_day = [

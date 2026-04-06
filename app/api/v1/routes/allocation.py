@@ -127,14 +127,14 @@ class WarehousesListResponse(BaseModel):
 
 
 class WarehouseCapacityResponse(BaseModel):
-    """各仓库每日最大可发车数（当前为服务层模拟值）。"""
+    """各仓库每日最大可发车数：默认不封顶（值为 null）；可设 ALLOCATION_DAILY_CAP_PER_WAREHOUSE 封顶。"""
 
     model_config = ConfigDict(title="仓库日产能响应")
 
     success: bool = Field(True, description="是否成功")
-    daily_capacity: dict[str, int] = Field(
+    daily_capacity: dict[str, Optional[int]] = Field(
         ...,
-        description="仓库名称 → 每日最大车数",
+        description="仓库名称 → 每日最大车数；未配置封顶时为 null（排产模型中无日上限约束）",
     )
 
 
@@ -772,7 +772,23 @@ async def generate_allocation_plan(
         }
 
         if status not in ("Optimal", "Feasible"):
-            raise HTTPException(status_code=500, detail=f"规划求解失败: {status}")
+            logger.warning(
+                "generate_allocation_plan: solver not ok status=%s window_start=%s window_end=%s H=%s contracts=%s",
+                status,
+                window_start,
+                window_end,
+                H,
+                len(contracts),
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"规划求解未成功，状态为 {status}（常见为 Infeasible："
+                    "合同在窗口内的有效发货日与剩余车数、均衡约束等冲突）。"
+                    "可尝试增大 H、调整 window_start/as_of_date。"
+                    "若配置了 ALLOCATION_DAILY_CAP_PER_WAREHOUSE，可清空或删除该变量以取消每库日上限。"
+                ),
+            )
 
         _save_predictions_to_db(plan, window_start, is_test=False)
 
